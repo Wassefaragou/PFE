@@ -1,0 +1,685 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --bg-dark: #0b0f19;
+    --bg-card: rgba(255, 255, 255, 0.04);
+    --accent: #6c63ff;
+    --accent2: #00d4aa;
+    --accent3: #ff6b6b;
+    --accent4: #4facfe;
+    --text-primary: #e8eaf6;
+    --text-muted: #8892b0;
+    --glass-bg: rgba(255, 255, 255, 0.06);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --radius: 16px;
+}
+
+html,
+body,
+[class*="st-"] {
+    font-family: 'Inter', -apple-system, sans-serif !important;
+}
+
+.stApp {
+    background: linear-gradient(160deg, #0b0f19 0%, #111827 40%, #0f172a 100%);
+}
+
+#MainMenu {
+    visibility: hidden !important;
+    height: 0 !important;
+}
+
+header[data-testid="stHeader"] {
+    background: transparent !important;
+}
+
+.stDeployButton,
+[data-testid="stAppDeployButton"],
+[data-testid="stToolbarActions"],
+[data-testid="stStatusWidget"] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+}
+
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stExpandSidebarButton"],
+button[kind="headerNoPadding"] {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    color: #c4b5fd !important;
+    z-index: 9999 !important;
+}
+
+[data-testid="collapsedControl"] span,
+[data-testid="stSidebarCollapseButton"] span,
+[data-testid="stExpandSidebarButton"] span,
+button[kind="headerNoPadding"] span {
+    font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
+    -webkit-font-feature-settings: 'liga' 1;
+    font-feature-settings: 'liga' 1;
+}
+
+footer {
+    visibility: hidden !important;
+    height: 0 !important;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(108, 99, 255, 0.3);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(108, 99, 255, 0.5);
+}
+
+.hero-wrap {
+    background: linear-gradient(135deg, rgba(108, 99, 255, 0.12) 0%, rgba(0, 212, 170, 0.08) 50%, rgba(79, 172, 254, 0.10) 100%);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 3rem 2rem 2.2rem;
+    text-align: center;
+    margin-bottom: 2rem;
+    backdrop-filter: blur(16px);
+    position: relative;
+    overflow: hidden;
+}
+
+.hero-wrap::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(ellipse at 30% 20%, rgba(108, 99, 255, 0.18) 0%, transparent 50%),
+        radial-gradient(ellipse at 70% 80%, rgba(0, 212, 170, 0.12) 0%, transparent 50%);
+    animation: aurora 8s ease-in-out infinite alternate;
+    pointer-events: none;
+}
+
+.hero-wrap::after {
+    content: '';
+    position: absolute;
+    top: 10%;
+    right: 10%;
+    width: 120px;
+    height: 120px;
+    background: radial-gradient(circle, rgba(108, 99, 255, 0.2) 0%, transparent 70%);
+    border-radius: 50%;
+    animation: float-orb 6s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes aurora {
+    0% {
+        transform: translate(0, 0) rotate(0deg);
+    }
+
+    100% {
+        transform: translate(2%, -2%) rotate(3deg);
+    }
+}
+
+@keyframes float-orb {
+
+    0%,
+    100% {
+        transform: translate(0, 0) scale(1);
+        opacity: 0.6;
+    }
+
+    50% {
+        transform: translate(-20px, 15px) scale(1.15);
+        opacity: 1;
+    }
+}
+
+@keyframes pulse-glow {
+
+    0%,
+    100% {
+        box-shadow: 0 0 20px rgba(108, 99, 255, 0.1);
+    }
+
+    50% {
+        box-shadow: 0 0 40px rgba(108, 99, 255, 0.2);
+    }
+}
+
+.hero-title {
+    font-size: 2.6rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #c4b5fd, #6c63ff, #00d4aa, #4facfe);
+    background-size: 300% 300%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin: 0;
+    position: relative;
+    letter-spacing: -0.02em;
+    animation: gradient-shift 6s ease infinite;
+}
+
+@keyframes gradient-shift {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+.hero-sub {
+    color: #94a3b8;
+    font-size: 1.08rem;
+    margin-top: 0.6rem;
+    font-weight: 400;
+    position: relative;
+    line-height: 1.5;
+}
+
+.hero-badges {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 1.4rem;
+    position: relative;
+    flex-wrap: wrap;
+}
+
+.hero-badge {
+    background: rgba(108, 99, 255, 0.15);
+    border: 1px solid rgba(108, 99, 255, 0.25);
+    color: #a78bfa;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    transition: all 0.3s ease;
+}
+
+.hero-badge:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(108, 99, 255, 0.2);
+}
+
+.hero-badge.green {
+    background: rgba(0, 212, 170, 0.12);
+    border-color: rgba(0, 212, 170, 0.25);
+    color: #00d4aa;
+}
+
+.hero-badge.blue {
+    background: rgba(79, 172, 254, 0.12);
+    border-color: rgba(79, 172, 254, 0.25);
+    color: #4facfe;
+}
+
+.hero-badge.orange {
+    background: rgba(251, 191, 36, 0.12);
+    border-color: rgba(251, 191, 36, 0.25);
+    color: #fbbf24;
+}
+
+.section-card {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    padding: 1.8rem;
+    margin-bottom: 1.5rem;
+    backdrop-filter: blur(10px);
+    transition: border-color 0.35s ease, box-shadow 0.35s ease, transform 0.35s ease;
+}
+
+.section-card:hover {
+    border-color: rgba(108, 99, 255, 0.2);
+    box-shadow: 0 4px 30px rgba(108, 99, 255, 0.08);
+    transform: translateY(-1px);
+}
+
+.section-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    margin-bottom: 0.6rem;
+}
+
+.section-label .num {
+    background: linear-gradient(135deg, var(--accent), #8b5cf6);
+    color: white;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(108, 99, 255, 0.3);
+}
+
+.section-heading {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin: 0 0 0.8rem 0;
+}
+
+.glass-metric {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 14px;
+    padding: 1.3rem 1rem;
+    text-align: center;
+    backdrop-filter: blur(12px);
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.glass-metric:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.glass-metric .glow {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 14px 14px 0 0;
+}
+
+.glow-purple {
+    background: linear-gradient(90deg, #6c63ff, #a78bfa);
+}
+
+.glow-green {
+    background: linear-gradient(90deg, #00d4aa, #38ef7d);
+}
+
+.glow-pink {
+    background: linear-gradient(90deg, #ff6b6b, #f093fb);
+}
+
+.glow-blue {
+    background: linear-gradient(90deg, #4facfe, #00f2fe);
+}
+
+.glass-metric h4 {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.glass-metric .val {
+    font-size: 1.7rem;
+    font-weight: 700;
+    color: #f8fafc;
+    margin: 0.4rem 0 0 0;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.glass-metric .unit {
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.alert-info {
+    background: rgba(79, 172, 254, 0.08);
+    border: 1px solid rgba(79, 172, 254, 0.2);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin: 1rem 0;
+    color: #93c5fd;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    backdrop-filter: blur(8px);
+}
+
+.alert-info strong {
+    color: #bfdbfe;
+}
+
+.alert-success {
+    background: rgba(0, 212, 170, 0.08);
+    border: 1px solid rgba(0, 212, 170, 0.2);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin: 1rem 0;
+    color: #6ee7b7;
+    font-size: 0.9rem;
+    backdrop-filter: blur(8px);
+}
+
+.alert-error {
+    background: rgba(255, 107, 107, 0.08);
+    border: 1px solid rgba(255, 107, 107, 0.2);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin: 1rem 0;
+    color: #fca5a5;
+    font-size: 0.9rem;
+    backdrop-filter: blur(8px);
+}
+
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0b0f19 0%, #111827 50%, #0f172a 100%) !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+section[data-testid="stSidebar"] .stMarkdown {
+    color: #cbd5e1;
+}
+
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3,
+section[data-testid="stSidebar"] h4,
+section[data-testid="stSidebar"] h5 {
+    color: #f1f5f9 !important;
+}
+
+section[data-testid="stSidebar"] hr {
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-logo {
+    text-align: center;
+    padding: 1.2rem 0 0.5rem;
+}
+
+.sidebar-logo .logo-icon {
+    font-size: 2.5rem;
+    display: block;
+    margin-bottom: 0.4rem;
+    filter: drop-shadow(0 2px 8px rgba(108, 99, 255, 0.3));
+}
+
+.sidebar-logo .logo-text {
+    font-size: 1.15rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #a78bfa, #00d4aa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.sidebar-config-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 0.5rem;
+}
+
+.sidebar-config-item {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 12px;
+    padding: 0.8rem 0.6rem;
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.sidebar-config-item:hover {
+    background: rgba(108, 99, 255, 0.08);
+    border-color: rgba(108, 99, 255, 0.2);
+    transform: translateY(-1px);
+}
+
+.sidebar-config-item .cfg-icon {
+    font-size: 1.2rem;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.sidebar-config-item .cfg-val {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    font-family: 'JetBrains Mono', monospace;
+    margin: 2px 0;
+}
+
+.sidebar-config-item .cfg-label {
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    padding: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stTabs [data-baseweb="tab"] {
+    border-radius: 10px;
+    padding: 10px 20px;
+    font-weight: 500;
+    color: #94a3b8;
+    font-size: 0.88rem;
+    transition: all 0.25s ease;
+}
+
+.stTabs [data-baseweb="tab"]:hover {
+    color: #c4b5fd;
+    background: rgba(108, 99, 255, 0.08);
+}
+
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    background: rgba(108, 99, 255, 0.18) !important;
+    color: #a78bfa !important;
+    box-shadow: 0 2px 10px rgba(108, 99, 255, 0.15);
+}
+
+div[data-testid="stDataFrame"] {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.stDownloadButton button {
+    background: linear-gradient(135deg, rgba(108, 99, 255, 0.2), rgba(108, 99, 255, 0.1)) !important;
+    border: 1px solid rgba(108, 99, 255, 0.3) !important;
+    color: #c4b5fd !important;
+    border-radius: 12px !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+}
+
+.stDownloadButton button:hover {
+    background: linear-gradient(135deg, rgba(108, 99, 255, 0.3), rgba(108, 99, 255, 0.15)) !important;
+    border-color: rgba(108, 99, 255, 0.5) !important;
+    box-shadow: 0 4px 20px rgba(108, 99, 255, 0.2) !important;
+    transform: translateY(-1px);
+}
+
+.stButton button[kind="primary"],
+.stButton>button {
+    background: linear-gradient(135deg, #6c63ff, #8b5cf6) !important;
+    border: none !important;
+    color: white !important;
+    border-radius: 12px !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+    box-shadow: 0 4px 15px rgba(108, 99, 255, 0.3);
+}
+
+.stButton button[kind="primary"]:hover,
+.stButton>button:hover {
+    background: linear-gradient(135deg, #7c73ff, #9b6cf6) !important;
+    box-shadow: 0 6px 25px rgba(108, 99, 255, 0.4) !important;
+    transform: translateY(-2px);
+}
+
+[data-testid="stFileUploader"] section {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border: 2px dashed rgba(108, 99, 255, 0.25) !important;
+    border-radius: 14px !important;
+    padding: 2rem !important;
+    transition: all 0.3s ease;
+}
+
+[data-testid="stFileUploader"] section:hover {
+    border-color: rgba(108, 99, 255, 0.45) !important;
+    background: rgba(108, 99, 255, 0.06) !important;
+}
+
+[data-testid="stFileUploader"] button {
+    background: rgba(108, 99, 255, 0.15) !important;
+    border: 1px solid rgba(108, 99, 255, 0.3) !important;
+    color: #c4b5fd !important;
+    border-radius: 10px !important;
+}
+
+.streamlit-expanderHeader {
+    background: rgba(255, 255, 255, 0.04) !important;
+    border-radius: 10px !important;
+    color: #94a3b8 !important;
+}
+
+.streamlit-expanderHeader:hover {
+    background: rgba(255, 255, 255, 0.07) !important;
+    color: #c4b5fd !important;
+}
+
+[data-testid="stExpander"] {
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    border-radius: 12px !important;
+    background: rgba(255, 255, 255, 0.02) !important;
+}
+
+/* Fix Material Icon "keyboard_arrow_right" rendering as raw text */
+[data-testid="stExpander"] summary span span span {
+    font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
+    font-size: 1.2rem !important;
+    -webkit-font-feature-settings: 'liga' 1;
+    font-feature-settings: 'liga' 1;
+    color: #64748b !important;
+}
+
+/* Fallback: if icon font isn't loaded, hide the text and use CSS arrow */
+@supports not (font-variation-settings: normal) {
+    [data-testid="stExpander"] summary span span span {
+        font-size: 0 !important;
+        display: inline-block;
+        width: 1.2rem;
+        height: 1.2rem;
+    }
+}
+
+[data-testid="stRadio"]>label {
+    color: #94a3b8 !important;
+    font-weight: 500 !important;
+}
+
+.stRadio>div[role="radiogroup"]>label {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border-radius: 10px !important;
+    padding: 8px 14px !important;
+    margin-bottom: 4px !important;
+    transition: all 0.2s ease !important;
+    border: 1px solid transparent;
+}
+
+.stRadio>div[role="radiogroup"]>label:hover {
+    background: rgba(108, 99, 255, 0.08) !important;
+    border-color: rgba(108, 99, 255, 0.15) !important;
+}
+
+.stProgress>div>div>div {
+    background: linear-gradient(90deg, #6c63ff, #00d4aa) !important;
+    border-radius: 8px;
+}
+
+.stProgress>div>div {
+    background: rgba(255, 255, 255, 0.06) !important;
+    border-radius: 8px;
+}
+
+[data-testid="stMetric"] {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    padding: 12px 16px;
+}
+
+[data-testid="stMetric"] label {
+    color: #94a3b8 !important;
+}
+
+[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    color: #f1f5f9 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+.stMarkdown h2 {
+    color: #f1f5f9 !important;
+}
+
+.stMarkdown h3 {
+    color: #e2e8f0 !important;
+}
+
+.stMarkdown h4 {
+    color: #cbd5e1 !important;
+}
+
+hr {
+    border-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.app-footer {
+    text-align: center;
+    padding: 2.5rem 0 1.5rem;
+    margin-top: 3rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    color: #475569;
+    font-size: 0.82rem;
+}
+
+/* Number inputs styling */
+[data-testid="stNumberInput"] input {
+    background: rgba(255, 255, 255, 0.06) !important;
+    color: #f1f5f9 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px !important;
+}
+
+[data-testid="stNumberInput"] button {
+    background: rgba(108, 99, 255, 0.15) !important;
+    color: #c4b5fd !important;
+}
