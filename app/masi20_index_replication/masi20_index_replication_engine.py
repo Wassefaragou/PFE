@@ -282,56 +282,6 @@ def select_lasso_cv(X_train, y_train, K):
     return sel_idx, scores, ranks, lasso_info
 
 
-def select_meta_score(X_train, y_train, stock_vals_train_end, K):
-    n_stocks = X_train.shape[1]
-    scores = np.zeros(n_stocks)
-    
-    corr_list = []
-    r2_list = []
-    beta_list = []
-    
-    var_y = np.var(y_train)
-    
-    for i in range(n_stocks):
-        x_i = X_train[:, i]
-        if np.std(x_i) == 0 or np.std(y_train) == 0:
-            corr = 0.0
-            beta = 0.0
-            r2 = 0.0
-        else:
-            corr = safe_corr(x_i, y_train)
-            beta = safe_beta(x_i, y_train, default=0.0) if var_y > 0 else 0.0
-            r2 = corr ** 2
-        
-        corr_list.append(corr)
-        r2_list.append(r2)
-        beta_list.append(beta)
-        
-    corr_arr = np.array(corr_list)
-    r2_arr = np.array(r2_list)
-    beta_arr = np.array(beta_list)
-    
-    # "Les termes avec * doivent être normalisés entre 0 et 1." (w_i^*)
-    w_raw = stock_vals_train_end / (np.sum(stock_vals_train_end) + 1e-8)
-    if np.max(w_raw) == np.min(w_raw):
-        w_norm = np.zeros_like(w_raw)
-    else:
-        w_norm = (w_raw - np.min(w_raw)) / (np.max(w_raw) - np.min(w_raw))
-        
-    for i in range(n_stocks):
-        scores[i] = 0.4 * corr_arr[i] + 0.3 * r2_arr[i] + 0.2 * w_norm[i] + 0.1 * (1 - abs(beta_arr[i] - 1))
-        
-    sel_idx = np.argsort(scores)[-K:]
-    
-    ranks = np.zeros(n_stocks)
-    for rank, idx in enumerate(np.argsort(scores)[::-1]):
-        ranks[idx] = rank + 1
-        
-    score_info = {
-        'method': 'Meta Score',
-    }
-    return sel_idx, scores, ranks, score_info
-
 def select_beta(X_train, y_train, K):
     n_stocks = X_train.shape[1]
     var_y = np.var(y_train)
@@ -816,9 +766,20 @@ def run_rolling(data, K=None, selected_indices=None, selection_method='lasso', w
     if max_rebals is not None and max_rebals < total_rebals:
         total_rebals = max_rebals
 
+    available_rebals = total_rebals
+    if available_rebals == 0:
+        raise ValueError(
+            f"Aucun rebalancement possible avec {total_len} jours, "
+            f"train_days={train_days}, test_days={test_days}, rebal_days={rebal_days}."
+        )
+
     # If selected_rebals provided, adjust total for progress
     if selected_rebals is not None:
-        selected_set = set(selected_rebals)
+        selected_set = {int(r) for r in selected_rebals if 1 <= int(r) <= available_rebals}
+        if not selected_set:
+            raise ValueError(
+                f"Aucun rebalancement sélectionné n'est valide. Rebalancements disponibles: 1 à {available_rebals}."
+            )
         total_rebals = len(selected_set)
     else:
         selected_set = None
@@ -866,10 +827,6 @@ def run_rolling(data, K=None, selected_indices=None, selection_method='lasso', w
             lasso_info = {'elapsed': 0.0}
         elif selection_method == 'lasso':
             sel_idx, scores, ranks, lasso_info = select_lasso_cv(X_train, y_train, K)
-        elif selection_method == 'score':
-            stock_vals_end = data['stock_values'][train_end - 1]
-            sel_idx, scores, ranks, lasso_info = select_meta_score(X_train, y_train, stock_vals_end, K)
-            lasso_info['elapsed'] = 0.0
         elif selection_method == 'beta':
             sel_idx, scores, ranks, lasso_info = select_beta(X_train, y_train, K)
             lasso_info['elapsed'] = 0.0
@@ -882,6 +839,8 @@ def run_rolling(data, K=None, selected_indices=None, selection_method='lasso', w
             lasso_info['elapsed'] = 0.0
         elif selection_method == 'lw':
             sel_idx, scores, ranks, lasso_info = select_lw_forward(X_train, y_train, K)
+        else:
+            raise ValueError(f"Méthode de sélection non supportée: {selection_method}")
 
         X_sel_train = X_train[:, sel_idx]
         X_sel_test  = X_test[:, sel_idx]
@@ -975,6 +934,9 @@ def run_rolling(data, K=None, selected_indices=None, selection_method='lasso', w
         prev_sel_idx = sel_idx.copy()
         cursor += rebal_days
 
+    if executed_count == 0:
+        raise ValueError("Aucun rebalancement n'a été exécuté avec la configuration demandée.")
+
     all_port = np.array(all_port_returns)
     all_idx  = np.array(all_idx_returns)
     all_diff = all_port - all_idx
@@ -1040,10 +1002,6 @@ def run_simple_replication(data, K=None, selected_indices=None, selection_method
         lasso_info = {'elapsed': 0.0}
     elif selection_method == 'lasso':
         sel_idx, scores, ranks, lasso_info = select_lasso_cv(X_train, y_train, K)
-    elif selection_method == 'score':
-        stock_vals_end = data['stock_values'][train_end - 1]
-        sel_idx, scores, ranks, lasso_info = select_meta_score(X_train, y_train, stock_vals_end, K)
-        lasso_info['elapsed'] = 0.0
     elif selection_method == 'beta':
         sel_idx, scores, ranks, lasso_info = select_beta(X_train, y_train, K)
         lasso_info['elapsed'] = 0.0
@@ -1056,6 +1014,8 @@ def run_simple_replication(data, K=None, selected_indices=None, selection_method
         lasso_info['elapsed'] = 0.0
     elif selection_method == 'lw':
         sel_idx, scores, ranks, lasso_info = select_lw_forward(X_train, y_train, K)
+    else:
+        raise ValueError(f"Méthode de sélection non supportée: {selection_method}")
 
     if progress_callback:
         progress_callback(2, 2, "Calcul des poids...")

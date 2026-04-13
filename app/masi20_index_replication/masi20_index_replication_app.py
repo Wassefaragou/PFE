@@ -410,8 +410,7 @@ def run():
             method_label = "Lasso" # par défaut
             if 'hyper_records' in result and len(result['hyper_records']) > 0:
                 method_info = result['hyper_records'][0].get('LASSO Méthode', '').lower()
-                if 'meta' in method_info or 'score' in method_info: method_label = "Meta"
-                elif 'beta' in method_info: method_label = "Beta"
+                if 'beta' in method_info: method_label = "Beta"
                 elif 'corr' in method_info and 'cap' in method_info: method_label = "Corr*Cap"
                 elif 'corr' in method_info and 'float' in method_info: method_label = "Corr*Float"
                 elif 'ledoit' in method_info or 'lw' in method_info: method_label = "LW"
@@ -505,8 +504,7 @@ def run():
             
             method_info = result.get('lasso_info', {}).get('method', result.get('lasso_info', {}).get('alpha_method', '')).lower()
             method_label = "Lasso"
-            if 'meta' in method_info or 'score' in method_info: method_label = "Meta"
-            elif 'beta' in method_info: method_label = "Beta"
+            if 'beta' in method_info: method_label = "Beta"
             elif 'corr' in method_info and 'cap' in method_info: method_label = "Corr*Cap"
             elif 'corr' in method_info and 'float' in method_info: method_label = "Corr*Float"
             elif 'ledoit' in method_info or 'lw' in method_info: method_label = "LW"
@@ -679,7 +677,7 @@ def run():
                 st.session_state['user_k'] = user_k
                 
             with col_sel:
-                selection_options = ["Lasso", "Meta Score", "Beta"]
+                selection_options = ["Lasso", "Beta"]
                 if factor_methods_available:
                     selection_options.extend(["Corr × Cap", "Corr × Flottant"])
                 selection_options.extend(["Ledoit-Wolf", "Manuelle"])
@@ -692,8 +690,6 @@ def run():
                 )
                 if selection_method_choice == "Lasso":
                     selection_method = "lasso"
-                elif selection_method_choice == "Meta Score":
-                    selection_method = "score"
                 elif selection_method_choice == "Beta":
                     selection_method = "beta"
                 elif selection_method_choice == "Corr × Cap":
