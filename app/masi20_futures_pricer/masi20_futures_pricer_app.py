@@ -324,9 +324,13 @@ def run():
             return market_curve_table
 
         formatted = market_curve_table.copy()
-        if "Value Date" in formatted.columns:
-            formatted["Value Date"] = formatted["Value Date"].dt.strftime("%d/%m/%Y")
-        formatted["Maturity Date"] = formatted["Maturity Date"].dt.strftime("%d/%m/%Y")
+        for column in ("Value Date", "Maturity Date"):
+            if column in formatted.columns:
+                formatted[column] = pd.to_datetime(
+                    formatted[column],
+                    dayfirst=True,
+                    errors="coerce",
+                ).dt.strftime("%d/%m/%Y")
         formatted = formatted.rename(
             columns={
                 "Value Date": "Date de valeur",
@@ -358,7 +362,21 @@ def run():
 
         source_table = format_market_table(market_curve_table)
         merge_keys = ["Date de valeur", "Date d'echeance", "Maturite courbe (jours)"]
-        return combined
+        source_columns = merge_keys + ["Taux marche (%)", "Convention source"]
+        if any(column not in source_table.columns for column in source_columns):
+            return combined
+
+        return (
+            combined.drop(
+                columns=["Taux marche (%)", "Convention source"],
+                errors="ignore",
+            )
+            .merge(
+                source_table[source_columns].drop_duplicates(subset=merge_keys),
+                on=merge_keys,
+                how="left",
+            )
+        )
 
 
     def render_curve_empty_state(message: str) -> None:
