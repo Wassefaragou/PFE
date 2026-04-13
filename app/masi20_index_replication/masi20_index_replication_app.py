@@ -660,6 +660,14 @@ def run():
             </div>
             """, unsafe_allow_html=True)
             
+            try:
+                load_factors(required=True)
+                factor_methods_available = True
+                factor_methods_error = ""
+            except Exception as exc:
+                factor_methods_available = False
+                factor_methods_error = str(exc)
+
             col_k, col_sel = st.columns(2)
             with col_k:
                 user_k = st.number_input(
@@ -671,9 +679,14 @@ def run():
                 st.session_state['user_k'] = user_k
                 
             with col_sel:
+                selection_options = ["Lasso", "Meta Score", "Beta"]
+                if factor_methods_available:
+                    selection_options.extend(["Corr × Cap", "Corr × Flottant"])
+                selection_options.extend(["Ledoit-Wolf", "Manuelle"])
+
                 selection_method_choice = st.selectbox(
                     "Sélection", 
-                    ["Lasso", "Meta Score", "Beta", "Corr × Cap", "Corr × Flottant", "Ledoit-Wolf", "Manuelle"],
+                    selection_options,
                     help="Choisissez la méthode de sélection des titres.",
                     on_change=clear_results
                 )
@@ -692,12 +705,11 @@ def run():
                 else:
                     selection_method = "manual"
 
-            if selection_method in ['corr_cap', 'corr_float']:
-                try:
-                    load_factors(required=True)
-                except Exception as e:
-                    st.markdown(f'<div class="alert-error">❌ {e}</div>', unsafe_allow_html=True)
-                    st.stop()
+            if not factor_methods_available:
+                st.markdown(
+                    f'<div class="alert-warning">⚠️ Les méthodes Corr × Cap et Corr × Flottant sont temporairement masquées : {factor_methods_error}</div>',
+                    unsafe_allow_html=True,
+                )
                     
             selected_titles = []
             if selection_method == "manual":

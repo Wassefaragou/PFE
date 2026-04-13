@@ -47,10 +47,13 @@ def compute_contract_metrics(
 
     valid_contracts = contracts.loc[contracts["is_valid"].fillna(False)].drop_duplicates("contract_code").copy()
     valid_trades = transactions_df.loc[transactions_df["is_official_for_calc"].fillna(False)].copy()
-    round_trip_fee_per_lot = sum(
-        pd.to_numeric(settings.get(key), errors="coerce")
-        for key in ("commission_bvc_rt", "commission_broker_rt", "commission_sgmat_rt")
-    )
+    fee_components = pd.to_numeric(
+        pd.Series(
+            [settings.get(key) for key in ("commission_bvc_rt", "commission_broker_rt", "commission_sgmat_rt")]
+        ),
+        errors="coerce",
+    ).fillna(0.0)
+    round_trip_fee_per_lot = float(fee_components.sum())
     spot_index = pd.to_numeric(settings.get("spot_index"), errors="coerce")
 
     metrics: list[dict] = []

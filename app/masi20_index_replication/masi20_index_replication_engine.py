@@ -1,12 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-Engine de réplication partielle d'indice — LASSO (CV) + DE Robuste
-Adapté pour Streamlit (sans I/O fichier, sans print)
-"""
+
 import time, warnings, os
 import numpy as np
 import pandas as pd
-from scipy.optimize import differential_evolution, minimize
+from scipy.optimize import minimize
 from sklearn.linear_model import LassoCV
 from sklearn.covariance import LedoitWolf
 
