@@ -46,9 +46,23 @@ def _chart_theme(chart: alt.Chart, *, height: int) -> alt.Chart:
     )
 
 
+def _portfolio_with_cmp(contract_metrics: pd.DataFrame, cmp_portfolio: pd.DataFrame) -> pd.DataFrame:
+    if contract_metrics.empty:
+        return contract_metrics
+    cmp_view = (
+        cmp_portfolio[["contract_code", "cmp_final_cost"]].rename(columns={"cmp_final_cost": "cmp_value"}).copy()
+        if not cmp_portfolio.empty
+        else pd.DataFrame(columns=["contract_code", "cmp_value"])
+    )
+    return pd.merge(contract_metrics.copy(), cmp_view, on="contract_code", how="left")
+
+
 def _ranked_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
     chart_data = dataframe[["contract_code", "pnl_management_mad", "abs_position", "mtm_source", "leverage"]].copy()
     chart_data = chart_data.sort_values("pnl_management_mad", ascending=True).reset_index(drop=True)
+    chart_data["source_label"] = chart_data["mtm_source"].map(
+        {"contract": "Referentiel", "missing": "Non renseigne"}
+    ).fillna(chart_data["mtm_source"])
     order = chart_data["contract_code"].tolist()
     base = alt.Chart(chart_data)
     zero_rule = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color=ZERO_LINE, strokeDash=[6, 4]).encode(x="x:Q")
@@ -64,7 +78,7 @@ def _ranked_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
             alt.Tooltip("contract_code:N", title="Contrat"),
             alt.Tooltip("pnl_management_mad:Q", title="P&L economique", format=",.2f"),
             alt.Tooltip("abs_position:Q", title="Position", format=",.0f"),
-            alt.Tooltip("mtm_source:N", title="Source MtM"),
+            alt.Tooltip("source_label:N", title="Source MtM"),
             alt.Tooltip("leverage:Q", title="Levier", format=",.2f"),
         ],
     )
@@ -203,7 +217,7 @@ def _leverage_chart(dataframe: pd.DataFrame) -> alt.Chart:
 def _mtm_source_chart(dataframe: pd.DataFrame) -> alt.Chart:
     chart_data = dataframe.copy()
     chart_data["source_label"] = chart_data["mtm_source"].map(
-        {"settlement": "Settlement", "theoretical": "Theorique"}
+        {"contract": "Referentiel", "missing": "Non renseigne"}
     ).fillna(chart_data["mtm_source"])
     chart_data = chart_data.melt(
         id_vars="source_label",
@@ -248,14 +262,16 @@ render_sidebar_tools(state)
 
 global_metrics = state["global_metrics"]
 contract_metrics = state["contract_metrics"]
+cmp_portfolio = state["cmp_portfolio"]
+portfolio_view = _portfolio_with_cmp(contract_metrics, cmp_portfolio)
 active_contracts = int((contract_metrics["abs_position"] > 0).sum()) if not contract_metrics.empty else 0
 profitable_contracts = int((contract_metrics["pnl_management_mad"] > 0).sum()) if not contract_metrics.empty else 0
-settlement_sourced = int((contract_metrics["mtm_source"] == "settlement").sum()) if not contract_metrics.empty else 0
+contracts_with_mtm = int((contract_metrics["mtm_source"] == "contract").sum()) if not contract_metrics.empty else 0
 
 render_hero(
     "PnL global",
-    "Vue de pilotage du portefeuille avec contribution par contrat, structure du capital et lecture des sources MtM.",
-    badges=[("Vue portefeuille", ""), ("Capital", "purple"), ("Sources MtM", "green")],
+    "Vue de pilotage du portefeuille avec calcul P&L et lecture du vrai CMP par contrat.",
+    badges=[("Vue portefeuille", ""), ("Capital", "purple"), ("CMP", "green")],
 )
 
 render_metric_cards(
@@ -272,14 +288,14 @@ render_metric_cards(
         {"label": "ROI marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
         {"label": "Contrats ouverts", "value": str(active_contracts), "glow": "purple"},
         {"label": "Contrats gagnants", "value": str(profitable_contracts), "glow": "green"},
-        {"label": "MtM settlement", "value": str(settlement_sourced), "glow": "blue"},
+        {"label": "Contrats avec MtM", "value": str(contracts_with_mtm), "glow": "blue"},
     ],
     columns=5,
 )
 
 render_section_header(
     "Pilotage portefeuille",
-    "Visualisations clarifiees du P&L, du capital engage par contrat et des sources de valorisation.",
+    "Visualisations clarifiees du P&L, du capital engage par contrat et de la couverture MtM.",
     step="01",
     label="Global",
 )
@@ -288,6 +304,7 @@ if contract_metrics.empty:
     render_status_box("Aucune metrique contrat disponible.", kind="info")
 else:
     ordered_metrics = contract_metrics.sort_values("pnl_management_mad", ascending=False).reset_index(drop=True)
+    ordered_portfolio = portfolio_view.sort_values("pnl_management_mad", ascending=False).reset_index(drop=True)
     winner = ordered_metrics.iloc[0]
     loser = ordered_metrics.sort_values("pnl_management_mad", ascending=True).iloc[0]
     levered = ordered_metrics.sort_values("leverage", ascending=False).iloc[0]
@@ -313,17 +330,17 @@ else:
         columns=3,
     )
 
-    portfolio_tab, capital_tab, mtm_tab = st.tabs(["Portefeuille", "Capital", "Sources MtM"])
+    portfolio_tab, capital_tab, mtm_tab = st.tabs(["Portefeuille", "Capital", "Couverture MtM"])
 
     with portfolio_tab:
         render_data_table(
-            ordered_metrics,
+            ordered_portfolio,
             [
                 "contract_code",
                 "mtm_source",
                 "side_label",
                 "abs_position",
-                "entry_wap",
+                "cmp_value",
                 "mtm_price",
                 "pnl_unrealized_mad",
                 "pnl_realized_mad",
@@ -333,21 +350,25 @@ else:
                 "leverage",
                 "expiry_alert",
             ],
+            label_overrides={
+                "cmp_value": "CMP",
+            },
         )
         pnl_col, breakdown_col = st.columns(2)
         with pnl_col:
             st.subheader("Classement P&L economique")
-            st.altair_chart(_ranked_pnl_chart(ordered_metrics), width='stretch')
+            st.altair_chart(_ranked_pnl_chart(ordered_metrics), width="stretch")
         with breakdown_col:
             st.subheader("Structure realisee vs latente")
-            st.altair_chart(_realized_vs_unrealized_chart(ordered_metrics), width='stretch')
+            st.altair_chart(_realized_vs_unrealized_chart(ordered_metrics), width="stretch")
 
     with capital_tab:
         render_data_table(
-            ordered_metrics,
+            ordered_portfolio,
             [
                 "contract_code",
                 "abs_position",
+                "cmp_value",
                 "margin_mad",
                 "notional_mad",
                 "signed_notional_mad",
@@ -356,6 +377,7 @@ else:
                 "expiry_alert",
             ],
             label_overrides={
+                "cmp_value": "CMP",
                 "notional_mad": "Exposition ouverte (abs.)",
                 "signed_notional_mad": "Exposition nette (signee)",
             },
@@ -363,10 +385,10 @@ else:
         capital_col, leverage_col = st.columns(2)
         with capital_col:
             st.subheader("Carte marge / exposition ouverte")
-            st.altair_chart(_capital_scatter_chart(ordered_metrics), width='stretch')
+            st.altair_chart(_capital_scatter_chart(ordered_metrics), width="stretch")
         with leverage_col:
             st.subheader("Classement du levier")
-            st.altair_chart(_leverage_chart(ordered_metrics), width='stretch')
+            st.altair_chart(_leverage_chart(ordered_metrics), width="stretch")
 
     with mtm_tab:
         mtm_summary = (
@@ -384,7 +406,7 @@ else:
         with summary_col:
             render_data_table(mtm_summary)
         with composition_col:
-            st.subheader("Impact par source MtM")
-            st.altair_chart(_mtm_source_chart(mtm_summary), width='stretch')
+            st.subheader("Impact par couverture MtM")
+            st.altair_chart(_mtm_source_chart(mtm_summary), width="stretch")
 
 render_footer()

@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from futures_pnl.config import STATUS_ALIASES, TRANSACTION_COLUMNS, TRANSACTION_STATUS_OPTIONS
+from futures_pnl.importers import prepare_transaction_import
 from futures_pnl.storage import save_transactions
 from futures_pnl.ui import (
     append_dataframe_rows,
@@ -16,6 +17,7 @@ from futures_pnl.ui import (
     render_form_group,
     render_hero,
     render_metric_cards,
+    render_micro_note,
     render_section_header,
     render_sidebar_tools,
     show_issues,
@@ -157,15 +159,48 @@ with tab_manual:
         st.rerun()
 
 with tab_import:
+    render_micro_note(
+        "Formats acceptes",
+        "L'import supporte soit le registre interne, soit l'export broker de type Symbol / Side / Executed Size / Average Price / Execution ID / Transact Time. Le statut est force a CONFIRME pour ce format.",
+        tone="info",
+    )
     uploaded_file = st.file_uploader("Importer un CSV transactions", type=["csv"])
     if uploaded_file is not None:
-        imported = pd.read_csv(uploaded_file)
-        st.write("Apercu du fichier importe")
-        render_data_table(imported)
-        if st.button("Ajouter les transactions importees", width="stretch"):
-            updated = append_dataframe_rows(transactions_raw, imported, TRANSACTION_COLUMNS)
-            save_transactions(updated)
-            st.rerun()
+        try:
+            raw_imported = pd.read_csv(uploaded_file, sep=None, engine="python", dtype=str)
+            imported, detected_format, ignored_columns = prepare_transaction_import(raw_imported)
+        except Exception as exc:
+            st.error(f"Import impossible: {exc}")
+        else:
+            missing_required = int(
+                imported[
+                    [
+                        "execution_id",
+                        "trade_date",
+                        "trade_time",
+                        "contract",
+                        "side_lp",
+                        "quantity_lots",
+                        "price_points",
+                    ]
+                ].isna().any(axis=1).sum()
+            )
+            render_metric_cards(
+                [
+                    {"label": "Format detecte", "value": detected_format, "glow": "purple"},
+                    {"label": "Lignes importees", "value": str(len(imported)), "glow": "gold"},
+                    {"label": "Lignes a verifier", "value": str(missing_required), "glow": "red"},
+                ],
+                columns=3,
+            )
+            st.write("Apercu du registre importe")
+            render_data_table(imported)
+            if ignored_columns:
+                st.caption(f"Colonnes ignorees: {', '.join(ignored_columns)}")
+            if st.button("Ajouter les transactions importees", width="stretch"):
+                updated = append_dataframe_rows(transactions_raw, imported, TRANSACTION_COLUMNS)
+                save_transactions(updated)
+                st.rerun()
 
 with tab_register:
     editor_source = transactions_raw.copy()

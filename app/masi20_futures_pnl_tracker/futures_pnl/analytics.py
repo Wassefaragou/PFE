@@ -13,6 +13,14 @@ def _safe_weighted_average(dataframe: pd.DataFrame) -> float:
     return float((dataframe["quantity_lots"] * dataframe["price_points"]).sum() / denominator)
 
 
+def _side_label_from_position(position: float) -> str:
+    if position > 0:
+        return "LONG"
+    if position < 0:
+        return "SHORT"
+    return "FLAT"
+
+
 def compute_contract_metrics(
     contracts_df: pd.DataFrame, transactions_df: pd.DataFrame, settings: dict
 ) -> pd.DataFrame:
@@ -40,8 +48,6 @@ def compute_contract_metrics(
                 "signed_notional_mad",
                 "margin_mad",
                 "leverage",
-                "base_points",
-                "mispricing_points",
             ]
         )
 
@@ -54,7 +60,6 @@ def compute_contract_metrics(
         errors="coerce",
     ).fillna(0.0)
     round_trip_fee_per_lot = float(fee_components.sum())
-    spot_index = pd.to_numeric(settings.get("spot_index"), errors="coerce")
 
     metrics: list[dict] = []
     for contract in valid_contracts.itertuples():
@@ -88,12 +93,6 @@ def compute_contract_metrics(
         signed_notional_mad = float(entry_wap * tick_value * net_position) if net_position != 0 else 0.0
         margin_mad = float(abs_position * contract.effective_initial_margin_per_lot)
         leverage = float(notional_mad / margin_mad) if margin_mad else 0.0
-        base_points = float(contract.mtm_price - spot_index) if pd.notna(contract.mtm_price) else np.nan
-        mispricing_points = (
-            float(contract.mtm_price - contract.theoretical_price)
-            if pd.notna(contract.mtm_price) and pd.notna(contract.theoretical_price)
-            else np.nan
-        )
 
         metrics.append(
             {
@@ -102,9 +101,7 @@ def compute_contract_metrics(
                 "expiry_date": contract.expiry_date,
                 "days_to_expiry": contract.days_to_expiry,
                 "expiry_alert": contract.expiry_alert,
-                "is_active_lp": contract.is_active_lp,
                 "settlement_price_points": contract.settlement_price_points,
-                "theoretical_price": contract.theoretical_price,
                 "mtm_price": contract.mtm_price,
                 "mtm_source": contract.mtm_source,
                 "effective_tick_value": tick_value,
@@ -134,8 +131,6 @@ def compute_contract_metrics(
                 "signed_notional_mad": signed_notional_mad,
                 "margin_mad": margin_mad,
                 "leverage": leverage,
-                "base_points": base_points,
-                "mispricing_points": mispricing_points,
                 "position_limit_breach": bool(
                     pd.notna(contract.effective_position_limit_per_contract)
                     and abs_position > float(contract.effective_position_limit_per_contract)
@@ -175,6 +170,133 @@ def compute_global_metrics(contract_metrics_df: pd.DataFrame) -> dict:
     return totals
 
 
+def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: pd.DataFrame) -> pd.DataFrame:
+    output_columns = [
+        "contract_code",
+        "underlying_name",
+        "expiry_date",
+        "days_to_expiry",
+        "expiry_alert",
+        "mtm_price",
+        "mtm_source",
+        "effective_tick_value",
+        "effective_initial_margin_per_lot",
+        "effective_position_limit_per_contract",
+        "cmp_final_position",
+        "cmp_final_cost",
+        "cmp_realized_total",
+        "cmp_unrealized",
+        "cmp_total",
+        "difference_vs_wap",
+        "within_tolerance",
+        "side_label",
+        "abs_position",
+        "notional_mad",
+        "signed_notional_mad",
+        "margin_mad",
+        "leverage",
+        "position_limit_breach",
+    ]
+    if contract_metrics_df.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    base = contract_metrics_df[
+        [
+            "contract_code",
+            "underlying_name",
+            "expiry_date",
+            "days_to_expiry",
+            "expiry_alert",
+            "mtm_price",
+            "mtm_source",
+            "effective_tick_value",
+            "effective_initial_margin_per_lot",
+            "effective_position_limit_per_contract",
+        ]
+    ].copy()
+
+    cmp_summary = (
+        cmp_summary_df[
+            [
+                "contract_code",
+                "cmp_final_position",
+                "cmp_final_cost",
+                "cmp_realized_total",
+                "cmp_unrealized",
+                "cmp_total",
+                "difference_vs_wap",
+                "within_tolerance",
+            ]
+        ].copy()
+        if not cmp_summary_df.empty
+        else pd.DataFrame(
+            columns=[
+                "contract_code",
+                "cmp_final_position",
+                "cmp_final_cost",
+                "cmp_realized_total",
+                "cmp_unrealized",
+                "cmp_total",
+                "difference_vs_wap",
+                "within_tolerance",
+            ]
+        )
+    )
+
+    portfolio = pd.merge(base, cmp_summary, on="contract_code", how="left")
+    numeric_fill_columns = [
+        "cmp_final_position",
+        "cmp_final_cost",
+        "cmp_realized_total",
+        "cmp_unrealized",
+        "cmp_total",
+        "difference_vs_wap",
+    ]
+    for column in numeric_fill_columns:
+        portfolio[column] = pd.to_numeric(portfolio[column], errors="coerce").fillna(0.0)
+    portfolio["within_tolerance"] = portfolio["within_tolerance"].fillna(True)
+
+    portfolio["abs_position"] = portfolio["cmp_final_position"].abs()
+    portfolio["side_label"] = portfolio["cmp_final_position"].map(_side_label_from_position)
+    portfolio["notional_mad"] = (
+        portfolio["abs_position"] * portfolio["cmp_final_cost"] * portfolio["effective_tick_value"]
+    )
+    portfolio["signed_notional_mad"] = (
+        portfolio["cmp_final_position"] * portfolio["cmp_final_cost"] * portfolio["effective_tick_value"]
+    )
+    portfolio["margin_mad"] = portfolio["abs_position"] * portfolio["effective_initial_margin_per_lot"]
+    portfolio["leverage"] = np.where(
+        portfolio["margin_mad"].ne(0),
+        portfolio["notional_mad"] / portfolio["margin_mad"],
+        0.0,
+    )
+    portfolio["position_limit_breach"] = (
+        portfolio["effective_position_limit_per_contract"].notna()
+        & portfolio["abs_position"].gt(portfolio["effective_position_limit_per_contract"])
+    )
+
+    return portfolio[output_columns].sort_values("contract_code").reset_index(drop=True)
+
+
+def compute_cmp_global_metrics(cmp_portfolio_df: pd.DataFrame) -> dict:
+    totals = {
+        "total_cmp_unrealized": float(cmp_portfolio_df.get("cmp_unrealized", pd.Series(dtype=float)).sum()),
+        "total_cmp_realized": float(cmp_portfolio_df.get("cmp_realized_total", pd.Series(dtype=float)).sum()),
+        "total_cmp_pnl": float(cmp_portfolio_df.get("cmp_total", pd.Series(dtype=float)).sum()),
+        "total_notional": float(cmp_portfolio_df.get("notional_mad", pd.Series(dtype=float)).sum()),
+        "total_net_notional": float(cmp_portfolio_df.get("signed_notional_mad", pd.Series(dtype=float)).sum()),
+        "total_margin": float(cmp_portfolio_df.get("margin_mad", pd.Series(dtype=float)).sum()),
+    }
+    total_margin = totals["total_margin"]
+    totals.update(
+        {
+            "global_leverage": float(totals["total_notional"] / total_margin) if total_margin else 0.0,
+            "roi_on_margin": float(totals["total_cmp_pnl"] / total_margin) if total_margin else 0.0,
+        }
+    )
+    return totals
+
+
 def build_dashboard_alerts(
     contracts_df: pd.DataFrame,
     contract_issues_df: pd.DataFrame,
@@ -184,32 +306,18 @@ def build_dashboard_alerts(
 ) -> list[dict]:
     alerts: list[dict] = []
 
-    if not contract_metrics_df.empty and {"is_active_lp", "abs_position", "contract_code"}.issubset(contract_metrics_df.columns):
-        inactive_open = contract_metrics_df.loc[
-            (~contract_metrics_df["is_active_lp"].fillna(False)) & (contract_metrics_df["abs_position"] > 0)
+    if not contract_metrics_df.empty and {"contract_code", "abs_position", "mtm_price"}.issubset(contract_metrics_df.columns):
+        open_without_mtm = contract_metrics_df.loc[
+            (contract_metrics_df["abs_position"] > 0) & contract_metrics_df["mtm_price"].isna()
         ]
-        for record in inactive_open.itertuples():
+        for record in open_without_mtm.itertuples():
             alerts.append(
                 {
                     "severity": "warning",
-                    "category": "position_open_on_inactive_contract",
-                    "message": f"{record.contract_code}: position ouverte sur contrat inactif.",
+                    "category": "open_position_without_mtm",
+                    "message": f"{record.contract_code}: position ouverte sans MtM renseigne.",
                 }
             )
-
-    active_without_settlement = contracts_df.loc[
-        contracts_df["is_valid"].fillna(False)
-        & contracts_df["is_active_lp"].fillna(False)
-        & contracts_df["settlement_price_points"].isna()
-    ]
-    for record in active_without_settlement.itertuples():
-        alerts.append(
-            {
-                "severity": "warning",
-                "category": "active_contract_without_settlement",
-                "message": f"{record.contract_code}: contrat actif sans settlement price.",
-            }
-        )
 
     if not contract_metrics_df.empty and {"position_limit_breach", "contract_code", "abs_position"}.issubset(contract_metrics_df.columns):
         breached_limits = contract_metrics_df.loc[contract_metrics_df["position_limit_breach"].fillna(False)]

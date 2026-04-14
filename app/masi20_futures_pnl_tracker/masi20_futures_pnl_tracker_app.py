@@ -20,10 +20,6 @@ def run() -> None:
         title="Position par contrat",
     )
     pnl_global = st.Page(str(PAGES_DIR / "pnl_global_page.py"), title="P&L Global")
-    cmp_sequentiel = st.Page(
-        str(PAGES_DIR / "cmp_sequentiel_page.py"),
-        title="CMP sequentiel",
-    )
 
     navigation = st.navigation(
         [
@@ -33,7 +29,6 @@ def run() -> None:
             transactions,
             positions,
             pnl_global,
-            cmp_sequentiel,
         ],
         position="sidebar",
     )

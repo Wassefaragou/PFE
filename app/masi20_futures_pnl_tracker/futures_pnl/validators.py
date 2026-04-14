@@ -8,7 +8,7 @@ from .config import (
     STATUS_ALIASES,
     TRANSACTION_COLUMNS,
 )
-from .contracts import clear_contract_overrides, enrich_contract_reference
+from .contracts import clear_contract_overrides, enrich_contract_reference, normalize_contract_code
 
 
 def _blank_to_na(value):
@@ -21,17 +21,6 @@ def _blank_to_na(value):
 
 def _normalize_text(series: pd.Series) -> pd.Series:
     return series.map(_blank_to_na).astype("object")
-
-
-def _normalize_bool(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if pd.isna(value):
-        return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    text = str(value).strip().lower()
-    return text in {"true", "1", "yes", "y", "oui"}
 
 
 def _issues_to_dataframe(issues: list[dict]) -> pd.DataFrame:
@@ -57,7 +46,6 @@ def validate_contracts(contracts_df: pd.DataFrame, settings: dict) -> tuple[pd.D
     numeric_columns = ["initial_margin_per_lot", "settlement_price_points"]
     for column in numeric_columns:
         contracts[column] = pd.to_numeric(contracts[column], errors="coerce")
-    contracts["is_active_lp"] = contracts["is_active_lp"].map(_normalize_bool)
 
     issues: list[dict] = []
     for record in contracts.itertuples():
@@ -78,7 +66,7 @@ def validate_contracts(contracts_df: pd.DataFrame, settings: dict) -> tuple[pd.D
                     "code": "invalid_settlement_price",
                     "row": record.row_number,
                     "entity": record.contract_code if pd.notna(record.contract_code) else "",
-                    "message": "settlement_price_points doit etre strictement positif.",
+                    "message": "Le MtM doit etre strictement positif.",
                 }
             )
     duplicate_codes = (
@@ -159,9 +147,7 @@ def validate_transactions(
     transactions["execution_id"] = transactions["execution_id"].map(
         lambda value: value.upper() if pd.notna(value) else pd.NA
     )
-    transactions["contract"] = transactions["contract"].map(
-        lambda value: value.upper() if pd.notna(value) else pd.NA
-    )
+    transactions["contract"] = transactions["contract"].map(normalize_contract_code)
     transactions["side_lp"] = transactions["side_lp"].map(
         lambda value: value.upper() if pd.notna(value) else pd.NA
     )

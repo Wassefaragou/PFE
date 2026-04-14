@@ -72,18 +72,16 @@ render_hero(
     badges=[("Univers dynamique", ""), ("Prix", "purple"), ("Validation", "green")],
 )
 
-active_count = int(contracts_priced["is_active_lp"].fillna(False).sum()) if not contracts_priced.empty else 0
 with_settlement = int(contracts_priced["settlement_price_points"].notna().sum()) if not contracts_priced.empty else 0
 invalid_count = int(contracts_priced["is_valid"].eq(False).sum()) if not contracts_priced.empty else 0
 
 render_metric_cards(
     [
         {"label": "Contrats", "value": str(len(contracts_raw)), "glow": "gold"},
-        {"label": "LP actifs", "value": str(active_count), "glow": "green"},
-        {"label": "Avec settlement", "value": str(with_settlement), "glow": "blue"},
+        {"label": "Avec MtM", "value": str(with_settlement), "glow": "blue"},
         {"label": "Lignes invalides", "value": str(invalid_count), "glow": "red"},
     ],
-    columns=4,
+    columns=3,
 )
 
 render_section_header(
@@ -100,13 +98,11 @@ editor_columns = [
     "expiry_date",
     "initial_margin_per_lot",
     "settlement_price_points",
-    "is_active_lp",
     "comments",
 ]
 editor_input = editor_source[editor_columns].copy()
 editor_input["expiry_date"] = editor_input["expiry_date"].fillna("").astype(str)
 editor_input["comments"] = editor_input["comments"].fillna("").astype(str)
-editor_input["is_active_lp"] = editor_input["is_active_lp"].fillna(False).astype(bool)
 editor_input["initial_margin_per_lot"] = pd.to_numeric(editor_input["initial_margin_per_lot"], errors="coerce")
 editor_input["settlement_price_points"] = pd.to_numeric(editor_input["settlement_price_points"], errors="coerce")
 
@@ -125,9 +121,8 @@ edited_contracts = st.data_editor(
         "settlement_price_points": st.column_config.NumberColumn(
             label_for("settlement_price_points"),
             format="%.4f",
-            help="Prix settlement / MtM du jour. Vous pouvez le modifier a chaque ouverture de l'application.",
+            help="MtM du contrat pour la valorisation du jour.",
         ),
-        "is_active_lp": st.column_config.CheckboxColumn(label_for("is_active_lp")),
         "comments": st.column_config.TextColumn(label_for("comments")),
     },
 )
@@ -148,7 +143,7 @@ if st.button("Enregistrer le referentiel", width="stretch"):
 
 render_section_header(
     "Controle et pricing",
-    "Validation des lignes et apercu des prix theoriques et MtM.",
+    "Validation des lignes et apercu du MtM saisi par contrat et du MtM retenu par le moteur.",
     step="02",
     label="Controles",
 )
@@ -158,8 +153,8 @@ display_columns = [
     "contract_code",
     "expiry_date",
     "initial_margin_per_lot",
+    "settlement_price_points",
     "effective_tick_value",
-    "theoretical_price",
     "mtm_price",
     "mtm_source",
     "days_to_expiry",

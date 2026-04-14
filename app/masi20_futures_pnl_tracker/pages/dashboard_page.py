@@ -7,7 +7,6 @@ from futures_pnl.ui import (
     format_pct,
     init_page,
     load_app_state,
-    project_tree_text,
     render_data_table,
     render_footer,
     render_hero,
@@ -47,9 +46,19 @@ def _chart_theme(chart: alt.Chart, *, height: int) -> alt.Chart:
     )
 
 
+def _portfolio_with_cmp(contract_metrics: pd.DataFrame, cmp_portfolio: pd.DataFrame) -> pd.DataFrame:
+    if contract_metrics.empty:
+        return contract_metrics
+    cmp_view = (
+        cmp_portfolio[["contract_code", "cmp_final_cost"]].rename(columns={"cmp_final_cost": "cmp_value"}).copy()
+        if not cmp_portfolio.empty
+        else pd.DataFrame(columns=["contract_code", "cmp_value"])
+    )
+    return pd.merge(contract_metrics.copy(), cmp_view, on="contract_code", how="left")
+
+
 def _dashboard_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
     chart_data = dataframe[["contract_code", "pnl_management_mad", "pnl_unrealized_mad", "pnl_realized_mad"]].copy()
-    # Sort by total P&L for clarity
     chart_data = chart_data.sort_values("pnl_management_mad", ascending=True).reset_index(drop=True)
     order = chart_data["contract_code"].tolist()
     chart_data = chart_data.melt(
@@ -94,8 +103,7 @@ def _dashboard_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
         x=alt.X("amount:Q"),
         text=alt.Text("amount:Q", format=",.0f"),
     )
-    n_contracts = dataframe["contract_code"].nunique()
-    dynamic_height = max(280, n_contracts * 100)
+    dynamic_height = max(280, dataframe["contract_code"].nunique() * 100)
     return _chart_theme(zero_rule + bars + labels, height=dynamic_height)
 
 
@@ -137,8 +145,7 @@ def _dashboard_capital_chart(dataframe: pd.DataFrame) -> alt.Chart:
         x=alt.X("amount:Q"),
         text=alt.Text("amount:Q", format=",.0f"),
     )
-    n_contracts = dataframe["contract_code"].nunique()
-    dynamic_height = max(250, n_contracts * 80)
+    dynamic_height = max(250, dataframe["contract_code"].nunique() * 80)
     return _chart_theme(bars + labels, height=dynamic_height)
 
 
@@ -148,13 +155,20 @@ render_sidebar_tools(state)
 
 global_metrics = state["global_metrics"]
 contract_metrics = state["contract_metrics"]
+cmp_portfolio = state["cmp_portfolio"]
 alerts = state["alerts"]
-cmp_summary = state["cmp_summary"]
+
+portfolio_view = _portfolio_with_cmp(contract_metrics, cmp_portfolio)
+open_cmp_view = (
+    portfolio_view.loc[portfolio_view["abs_position"] > 0].copy()
+    if not portfolio_view.empty and "abs_position" in portfolio_view.columns
+    else pd.DataFrame()
+)
 
 render_hero(
     "Index Futures P&L Tracker",
-    "Vue d'ensemble du portefeuille avec moteur WAP officiel, controle CMP et pilotage des positions.",
-    badges=[("WAP officiel", ""), ("Controle CMP", "purple"), ("Stockage local", "blue")],
+    "Vue d'ensemble du portefeuille avec calcul P&L et lecture du vrai CMP par contrat.",
+    badges=[("P&L officiel", ""), ("CMP", "purple"), ("MtM", "blue")],
 )
 
 render_metric_cards(
@@ -200,35 +214,35 @@ with col_health:
 
 render_section_header(
     "Synthese portefeuille",
-    "Vue officielle par contrat avec WAP d'entree, MtM, marge et alertes de limite.",
+    "Vue P&L par contrat avec CMP, MtM, marge et alertes de limite.",
     step="02",
     label="Portfolio",
 )
 
-if contract_metrics.empty:
+if portfolio_view.empty:
     render_status_box(
         "Aucune metrique disponible pour le moment. Commencez par creer des contrats et des transactions.",
         kind="info",
     )
 else:
-    display_columns = [
-        "contract_code",
-        "side_label",
-        "abs_position",
-        "entry_wap",
-        "mtm_price",
-        "pnl_unrealized_mad",
-        "pnl_realized_mad",
-        "pnl_management_mad",
-        "margin_mad",
-        "signed_notional_mad",
-        "position_limit_breach",
-        "expiry_alert",
-    ]
     render_data_table(
-        contract_metrics,
-        display_columns,
+        portfolio_view,
+        [
+            "contract_code",
+            "side_label",
+            "abs_position",
+            "cmp_value",
+            "mtm_price",
+            "pnl_unrealized_mad",
+            "pnl_realized_mad",
+            "pnl_management_mad",
+            "margin_mad",
+            "signed_notional_mad",
+            "position_limit_breach",
+            "expiry_alert",
+        ],
         label_overrides={
+            "cmp_value": "CMP",
             "signed_notional_mad": "Exposition nette (signee)",
         },
     )
@@ -236,44 +250,46 @@ else:
     chart_col_left, chart_col_right = st.columns(2)
     with chart_col_left:
         st.subheader("P&L par contrat")
-        st.altair_chart(_dashboard_pnl_chart(contract_metrics), width='stretch')
+        st.altair_chart(_dashboard_pnl_chart(contract_metrics), width="stretch")
     with chart_col_right:
         st.subheader("Efficacite du capital")
-        st.altair_chart(_dashboard_capital_chart(contract_metrics), width='stretch')
+        st.altair_chart(_dashboard_capital_chart(contract_metrics), width="stretch")
 
 render_section_header(
-    "Controles",
-    "Vue confirmee, controle CMP et arborescence locale du projet.",
+    "Lecture CMP",
+    "Lecture rapide du vrai CMP par contrat ouvert.",
     step="03",
-    label="Controles",
+    label="CMP",
 )
 
-tab_confirmed, tab_cmp, tab_tree = st.tabs(["Confirmes", "Controle CMP", "Arborescence"])
+if open_cmp_view.empty:
+    render_status_box("Aucun CMP a afficher pour le moment.", kind="info")
+else:
+    render_data_table(
+        open_cmp_view.sort_values(["abs_position", "contract_code"], ascending=[False, True]),
+        [
+            "contract_code",
+            "side_label",
+            "abs_position",
+            "cmp_value",
+            "mtm_price",
+            "delta_points",
+        ],
+        label_overrides={
+            "cmp_value": "CMP",
+        },
+    )
 
-with tab_confirmed:
-    st.caption("Informatif uniquement. Cette vue ne remplace pas le moteur officiel.")
-    if state["confirmed_positions"].empty:
-        render_status_box("Aucune position confirmee a afficher.", kind="info")
-    else:
-        render_data_table(state["confirmed_positions"])
-
-with tab_cmp:
-    if cmp_summary.empty:
-        render_status_box("Aucun resultat CMP disponible pour le moment.", kind="info")
-    else:
-        ok_count = int(cmp_summary["within_tolerance"].fillna(False).sum())
-        render_metric_cards(
-            [
-                {"label": "Contrats testes", "value": str(len(cmp_summary)), "glow": "purple"},
-                {"label": "Dans la tolerance", "value": str(ok_count), "glow": "green"},
-                {"label": "Ecarts", "value": str(len(cmp_summary) - ok_count), "glow": "red"},
-            ],
-            columns=3,
-        )
-        render_data_table(cmp_summary)
-
-with tab_tree:
-    with st.expander("Arborescence du projet", expanded=False):
-        st.code(project_tree_text(), language="text")
+render_section_header(
+    "Vue confirmee",
+    "Cette vue est informative uniquement et ne remplace jamais le moteur officiel.",
+    step="04",
+    label="Informative",
+)
+if state["confirmed_positions"].empty:
+    render_status_box("Aucune vue confirmee disponible.", kind="info")
+else:
+    render_status_box("Informatif uniquement. Cette vue ne remplace pas le P&L officiel.", kind="warning")
+    render_data_table(state["confirmed_positions"])
 
 render_footer()

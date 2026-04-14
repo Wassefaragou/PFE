@@ -1,25 +1,14 @@
 # -*- coding: utf-8 -*-
-"""
-Streamlit App - Pricer Futures MASI 20
-
-Le taux sans risque n'expose que deux modes:
-1. Courbe construite a partir d'un CSV de marche secondaire
-2. Taux manuel saisi par l'utilisateur
-"""
-
 from __future__ import annotations
 
 from datetime import datetime
-import io
 import os
 import re
 import unicodedata
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 
 try:
@@ -36,15 +25,14 @@ from masi20_futures_pricer_engine import (
     compute_dividend_yield,
     compute_index_weights_from_caps,
     generate_maturity_schedule,
-    generate_term_structure,
     interpolate_rate,
     price_future,
-    sensitivity_analysis,
 )
 
 APP_TITLE = "MASI20 Futures Pricer"
 
 NAVIGATION_STATE_KEY = 'selected_app'
+DISPLAY_YEAR_DAY_COUNT = 360.0
 
 
 def run():
@@ -116,12 +104,38 @@ def run():
     EXPECTED_MASI20_TITLES = 20
 
 
-    def metric_card(label: str, value: str, glow: str = "gold") -> str:
-        return f"""<div class="glass-metric">
-            <div class="glow glow-{glow}"></div>
-            <h4>{label}</h4>
-            <div class="val">{value}</div>
-        </div>"""
+    def contract_price_card(
+        contract_label: str,
+        future_price: float,
+        maturity_date,
+        maturity_years: float,
+        rate_used_pct: float,
+    ) -> str:
+        maturity_text = maturity_date.strftime("%d/%m/%Y") if hasattr(maturity_date, "strftime") else str(maturity_date)
+        return (
+            '<div class="contract-price-card">'
+            '<div class="contract-price-accent"></div>'
+            '<div class="contract-price-header">'
+            f'<div class="contract-price-code">{contract_label}</div>'
+            '</div>'
+            f'<div class="contract-price-value">{future_price:.2f}</div>'
+            '<div class="contract-price-subtitle">Cours theorique</div>'
+            '<div class="contract-price-meta">'
+            '<div class="contract-price-meta-item">'
+            '<span class="contract-price-meta-label">Date d\'echeance</span>'
+            f'<span class="contract-price-meta-value">{maturity_text}</span>'
+            '</div>'
+            '<div class="contract-price-meta-item">'
+            '<span class="contract-price-meta-label">Horizon</span>'
+            f'<span class="contract-price-meta-value">{maturity_years:.3f} an</span>'
+            '</div>'
+            '<div class="contract-price-meta-item">'
+            '<span class="contract-price-meta-label">Taux sans risque</span>'
+            f'<span class="contract-price-meta-value">{rate_used_pct:.4f}%</span>'
+            '</div>'
+            '</div>'
+            '</div>'
+        )
 
 
     def decode_text_file(raw_bytes: bytes) -> str:
@@ -147,6 +161,19 @@ def run():
             raise ValueError("valeur manquante")
         text = text.replace("\xa0", " ").replace(" ", "").replace("%", "").replace(",", ".")
         return float(text)
+
+
+    def parse_optional_localized_float(value: object) -> tuple[float, str | None]:
+        text = str(value).strip() if value is not None else ""
+        if not text:
+            return float("nan"), None
+        try:
+            parsed_value = parse_localized_float(text)
+        except ValueError:
+            return float("nan"), "Le spot doit etre numerique."
+        if parsed_value < 0:
+            return float("nan"), "Le spot ne peut pas etre negatif."
+        return parsed_value, None
 
 
     def clean_title(value: object) -> str:
@@ -379,17 +406,33 @@ def run():
         )
 
 
-    def render_curve_empty_state(message: str) -> None:
-        st.markdown(
-            f"""
-            <div style="text-align: center; padding: 3rem 1rem; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px;">
-                <div style="font-size: 2rem; margin-bottom: 1rem;">Courbe</div>
-                <h4 style="color: #94a3b8; margin: 0;">Courbe indisponible</h4>
-                <p style="color: #64748b; margin-top: 0.5rem; font-size: 0.9rem;">{message}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    def days_to_display_years(days_value: object) -> float:
+        numeric_value = pd.to_numeric(days_value, errors="coerce")
+        if pd.isna(numeric_value):
+            return float("nan")
+        return round(float(numeric_value) / DISPLAY_YEAR_DAY_COUNT, 3)
+
+
+    def format_display_years(days_value: object) -> str:
+        years_value = days_to_display_years(days_value)
+        if pd.isna(years_value):
+            return "-"
+        years_text = f"{years_value:.3f}".rstrip("0").rstrip(".")
+        unit = "an" if years_text == "1" else "ans"
+        return f"{years_text} {unit}"
+
+
+    def build_curve_table_ui(curve_table: pd.DataFrame) -> pd.DataFrame:
+        if curve_table.empty:
+            return curve_table
+
+        curve_table_ui = curve_table.copy()
+        if "Maturite courbe (jours)" in curve_table_ui.columns:
+            curve_table_ui["Maturite courbe (ans)"] = pd.to_numeric(
+                curve_table_ui["Maturite courbe (jours)"],
+                errors="coerce",
+            ).apply(days_to_display_years)
+        return curve_table_ui
 
 
     def format_future_contract_code(maturity_date) -> str:
@@ -407,12 +450,30 @@ def run():
             11: "NOV",
             12: "DEC",
         }
-        return f"FMASI20{month_codes[maturity_date.month]}{str(maturity_date.year)[-2:]}"
+        return f"MASI20 FUTURE {month_codes[maturity_date.month]}{str(maturity_date.year)[-2:]}"
+
+
+    def build_upcoming_contracts(reference_date, contract_count: int) -> list[dict]:
+        raw_maturities = generate_maturity_schedule(
+            datetime.combine(reference_date, datetime.min.time()),
+            contract_count=contract_count,
+        )
+        contracts = []
+        for maturity in raw_maturities[:contract_count]:
+            maturity_date = maturity["date"].date() if hasattr(maturity["date"], "date") else maturity["date"]
+            contracts.append(
+                {
+                    "label": format_future_contract_code(maturity_date),
+                    "date": maturity_date,
+                    "days": max(0, int((maturity_date - reference_date).days)),
+                }
+            )
+        return contracts
 
 
     with st.sidebar:
         default_eval_date = datetime.now().date()
-        default_maturity_date = max(default_eval_date, datetime(2026, 6, 19).date())
+        default_contracts = build_upcoming_contracts(default_eval_date, 1)
 
         st.markdown(
             f"""
@@ -426,13 +487,15 @@ def run():
         st.markdown("---")
         st.markdown("##### Parametres")
 
-        spot_price = st.number_input(
+        spot_input = st.text_input(
             "Spot MASI20 (S)",
-            min_value=0.0,
-            value=1423.18,
-            step=1.0,
-            format="%.2f",
+            value="",
+            placeholder="Ex: 1423.18",
+            help="Laissez vide au premier lancement si le spot n'est pas encore disponible.",
         )
+        spot_price, spot_error = parse_optional_localized_float(spot_input)
+        if spot_error:
+            st.error(spot_error)
 
         st.markdown("---")
 
@@ -441,16 +504,26 @@ def run():
             value=default_eval_date,
             help="Date de depart du calcul (t=0).",
         )
+        multi_contract_count = int(st.number_input(
+            "Nombre de contrats",
+            min_value=1,
+            value=3,
+            step=1,
+            format="%d",
+            help="Selectionne autant de contrats trimestriels que necessaire apres la date de calcul.",
+        ))
+        selected_contracts = build_upcoming_contracts(eval_date, multi_contract_count)
+        maturity_date = selected_contracts[0]["date"] if selected_contracts else eval_date
 
-        maturity_date = st.date_input(
-            "Date d'echeance",
-            value=default_maturity_date,
-            min_value=eval_date,
-            help="0 jour est autorise pour tester le cas limite.",
-        )
-        days_to_maturity = max(0, (maturity_date - eval_date).days)
-        future_contract_code = format_future_contract_code(maturity_date)
-        st.caption(f"Code contrat : {future_contract_code}")
+        days_to_maturity = selected_contracts[0]["days"] if selected_contracts else 0
+        future_contract_code = selected_contracts[0]["label"] if selected_contracts else "-"
+        st.caption(f"Premier contrat : {future_contract_code}")
+        if selected_contracts:
+            st.caption(
+                "Contrats selectionnes : " + ", ".join(contract["label"] for contract in selected_contracts)
+            )
+        else:
+            st.warning("Aucune echeance trimestrielle disponible apres la date de calcul.")
 
         st.markdown("---")
         st.markdown("##### Resume")
@@ -459,15 +532,15 @@ def run():
             <div class="sidebar-config-grid">
                 <div class="sidebar-config-item">
                     <div class="cfg-val">{days_to_maturity}j</div>
-                    <div class="cfg-label">Maturite future</div>
+                    <div class="cfg-label">1re echeance</div>
                 </div>
                 <div class="sidebar-config-item">
                     <div class="cfg-val">{days_to_maturity / 360:.6f}</div>
-                    <div class="cfg-label">t = j/360</div>
+                    <div class="cfg-label">Horizon (an)</div>
                 </div>
                 <div class="sidebar-config-item">
                     <div class="cfg-val" style="font-size: 0.95rem;">{future_contract_code}</div>
-                    <div class="cfg-label">Code</div>
+                    <div class="cfg-label">Premier contrat</div>
                 </div>
             </div>
             """,
@@ -505,7 +578,7 @@ def run():
     market_curve_table = pd.DataFrame()
     rate_source_label = ""
     rate_warnings: list[str] = []
-    curve_axis_label = "Horizon (jours)"
+    curve_axis_label = "Horizon (ans)"
     effective_eval_date = eval_date
     effective_days_to_maturity = days_to_maturity
 
@@ -664,7 +737,7 @@ def run():
 
     if yc_ready:
         try:
-            curve_axis_label = "Horizon (jours)"
+            curve_axis_label = "Horizon (ans)"
             r_final = interpolate_rate(
                 effective_days_to_maturity,
                 yc_used,
@@ -692,7 +765,7 @@ def run():
         """
         <div class="section-card" style="margin-top:2rem;">
             <div class="section-label"><span class="num">2</span> COURBE TAUX</div>
-            <div class="section-heading">Vue et controle</div>
+            <div class="section-heading">Courbe des taux</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -702,15 +775,19 @@ def run():
 
     with tabs_yield[0]:
         if not yc_ready:
-            render_curve_empty_state("Choisissez une source de taux en section 1.")
+            st.empty()
         else:
             yc_df = curve_display_df.sort_values(by="Maturite courbe (jours)").reset_index(drop=True)
+            yc_years = yc_df["Maturite courbe (jours)"].apply(days_to_display_years)
             horizon_max = max(
                 360,
                 int(effective_days_to_maturity) + 360,
                 int(yc_df["Maturite courbe (jours)"].max()),
             )
             fine_days = list(range(1, min(10800, horizon_max) + 1, 5))
+            fine_years = [day / DISPLAY_YEAR_DAY_COUNT for day in fine_days]
+            future_years_to_maturity = effective_days_to_maturity / DISPLAY_YEAR_DAY_COUNT
+            future_years_label = format_display_years(effective_days_to_maturity)
             fine_rates = [
                 interpolate_rate(
                     day,
@@ -725,37 +802,40 @@ def run():
             fig_yc = go.Figure()
             fig_yc.add_trace(
                 go.Scatter(
-                    x=fine_days,
+                    x=fine_years,
                     y=fine_rates,
                     mode="lines",
                     name="Courbe taux",
                     line=dict(color=COLORS["rate"], width=2.5),
                     fill="tozeroy",
                     fillcolor="rgba(248, 113, 113, 0.08)",
+                    hovertemplate="Horizon: %{x:.3f} ans<br>Taux: %{y:.3f}%<extra></extra>",
                 )
             )
             fig_yc.add_trace(
                 go.Scatter(
-                    x=yc_df["Maturite courbe (jours)"].tolist(),
+                    x=yc_years.tolist(),
                     y=yc_df["Taux converti (%)"].tolist(),
                     mode="markers+text",
                     name="Piliers",
                     marker=dict(color="#fcd34d", size=10, line=dict(width=2, color="#f59e0b")),
-                    text=yc_df["Label"].tolist(),
+                    text=yc_df["Maturite courbe (jours)"].apply(format_display_years).tolist(),
                     textposition="top center",
                     textfont=dict(color="#fcd34d", size=10),
+                    hovertemplate="Pilier: %{text}<br>Horizon: %{x:.3f} ans<br>Taux: %{y:.3f}%<extra></extra>",
                 )
             )
             fig_yc.add_trace(
                 go.Scatter(
-                    x=[effective_days_to_maturity],
+                    x=[future_years_to_maturity],
                     y=[r_final * 100.0],
                     mode="markers+text",
-                    name=f"Taux future @ {effective_days_to_maturity}j",
+                    name=f"Taux future @ {future_years_label}",
                     marker=dict(color="#00d4aa", size=14, symbol="star", line=dict(width=2, color="white")),
                     text=[f"{r_final * 100.0:.3f}%"],
                     textposition="top center",
                     textfont=dict(color="#00d4aa", size=12, family="JetBrains Mono"),
+                    hovertemplate="Future: %{x:.3f} ans<br>Taux: %{y:.3f}%<extra></extra>",
                 )
             )
             fig_yc.update_layout(
@@ -769,7 +849,7 @@ def run():
             st.markdown(
                 f"""
                 <div class="alert-success">
-                    <strong>Taux retenu pour le future a {effective_days_to_maturity} jours :</strong><br>
+                    <strong>Taux retenu pour le future a {future_years_label} :</strong><br>
                     <span style="font-family: 'JetBrains Mono'; font-size: 1.3rem; color: #f8fafc;">
                         r = {r_final * 100.0:.4f}%
                     </span>
@@ -779,12 +859,12 @@ def run():
             )
     with tabs_yield[1]:
         if yc_ready:
-            st.markdown("##### Courbe des taux")
-            combined_curve_table = build_curve_table(curve_display_df, market_curve_table)
+            st.markdown("##### Points de courbe")
+            combined_curve_table = build_curve_table_ui(build_curve_table(curve_display_df, market_curve_table))
             display_columns = [
                 "Date de valeur",
                 "Date d'echeance",
-                "Maturite courbe (jours)",
+                "Maturite courbe (ans)",
                 "Taux marche (%)",
                 "Convention source",
                 "Convention cible",
@@ -797,11 +877,11 @@ def run():
                 height=320,
             )
             if rate_source == RATE_SOURCE_MARKET and rate_warnings:
-                with st.expander("Lignes ignorees"):
+                with st.expander("Lignes ignorees a l'import"):
                     for warning in rate_warnings:
                         st.write(f"- {warning}")
         else:
-            st.info("Aucune courbe a afficher.")
+            st.empty()
 
 
     st.markdown(
@@ -942,7 +1022,6 @@ def run():
             )
 
     has_prices = any(price is not None and price > 0 for price in stock_prices_dict.values())
-    has_caps = any(cap is not None and cap > 0 for cap in market_caps_dict.values())
     auto_dividend_ready = bool(weights) and not missing_caps_tickers and not missing_price_tickers and not missing_dividend_tickers
 
     if auto_dividend_ready:
@@ -980,8 +1059,8 @@ def run():
     st.markdown(
         """
         <div class="section-card" style="margin-top:2rem;">
-            <div class="section-label"><span class="num">4</span> PRICING</div>
-            <div class="section-heading">Prix theorique</div>
+            <div class="section-label"><span class="num">4</span> COURS THEORIQUES</div>
+            <div class="section-heading">Valorisation des contrats</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1005,13 +1084,16 @@ def run():
     if not has_prices:
         st.info("Le taux de dividende auto sera calcule une fois les titres renseignes.")
 
+    spot_ready = pd.notna(spot_price)
+    r_used = r_final
+    multi_records: list[dict] = []
+
     st.markdown("##### Parametres")
     col_p1, col_p2, col_p3 = st.columns(3)
 
     with col_p1:
-        st.metric("Taux utilise", f"{r_pricing_final * 100.0:.4f}%")
-        st.caption(f"Taux de courbe applique tel quel : {r_final * 100.0:.4f}%")
-        r_used = r_final
+        st.metric("Spot", "-" if not spot_ready else f"{spot_price:.2f}")
+        st.caption("Saisi dans la barre laterale")
 
     with col_p2:
         d_override = st.number_input(
@@ -1026,412 +1108,62 @@ def run():
         d_used = d_override / 100.0
 
     with col_p3:
-        st.metric("Maturite future", f"{effective_days_to_maturity}j")
-        st.metric("t (annee)", f"{effective_days_to_maturity / 360:.6f}")
-        st.caption(f"Calcul au {effective_eval_date.strftime('%d/%m/%Y')}")
+        st.metric("Nombre de contrats", str(len(selected_contracts)))
+        st.caption(
+            f"Calcul au {effective_eval_date.strftime('%d/%m/%Y')} | 1re echeance : {maturity_date.strftime('%d/%m/%Y') if hasattr(maturity_date, 'strftime') else maturity_date}"
+        )
 
-    result = price_future(spot_price, r_used, d_used, effective_days_to_maturity)
-
-    st.markdown(
-        f"""
-        <div class="pricing-result">
-            <div class="future-label">Prix theorique du future MASI20</div>
-            <div class="future-price">{result['future_price']:.2f}</div>
-            <div style="color: #94a3b8; font-size: 0.9rem; margin-top: 0.5rem;">
-                Echeance : <strong style="color: #f8fafc;">{maturity_date.strftime('%d/%m/%Y') if hasattr(maturity_date, 'strftime') else maturity_date}</strong>
-                &nbsp;&nbsp;|&nbsp;&nbsp;
-                Spot : <strong style="color: #f8fafc;">{spot_price:.2f}</strong>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.markdown(metric_card("Spot", f"{result['spot']:.2f}", "purple"), unsafe_allow_html=True)
-    with c2:
-        st.markdown(metric_card("Future", f"{result['future_price']:.2f}", "gold"), unsafe_allow_html=True)
-    with c3:
-        basis_sign = "+" if result["basis"] >= 0 else ""
-        st.markdown(metric_card("Base", f"{basis_sign}{result['basis']:.2f}", "green"), unsafe_allow_html=True)
-    with c4:
-        st.markdown(metric_card("Carry", f"{result['cost_of_carry'] * 100.0:.3f}%", "blue"), unsafe_allow_html=True)
-    with c5:
-        st.markdown(metric_card("Base %", f"{result['basis_pct']:.4f}%", "pink"), unsafe_allow_html=True)
-
-
-    st.markdown(
-        """
-        <div class="section-card" style="margin-top:2rem;">
-            <div class="section-label"><span class="num">5</span> ANALYSES</div>
-            <div class="section-heading">Scenarios et details</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    tabs_analysis = st.tabs(
-        [
-            "Terme",
-            "Sensibilite",
-            "Dividendes",
-            "Calcul",
-            "Export",
-        ]
-    )
-
-    with tabs_analysis[0]:
-        col_ts1, col_ts2 = st.columns([3, 1])
-        with col_ts2:
-            ts_max_days = st.slider(
-                "Horizon (jours)",
-                30,
-                1800,
-                min(720, max(effective_days_to_maturity + 90, 360)),
-            )
-            ts_step = st.slider("Pas (jours)", 1, 30, 1)
-
-        with col_ts1:
-            ts_df = generate_term_structure(
-                spot_price,
-                yc_used,
-                d_used,
-                ts_max_days,
-                ts_step,
-                valuation_date=effective_eval_date,
-            )
-            fig_ts = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_ts.add_trace(
-                go.Scatter(
-                    x=ts_df["Jours"],
-                    y=ts_df["Future"],
-                    name="Future",
-                    line=dict(color=COLORS["future"], width=2.5),
-                ),
-                secondary_y=False,
-            )
-            fig_ts.add_hline(
-                y=spot_price,
-                line_dash="dash",
-                line_color=COLORS["spot"],
-                annotation_text=f"Spot = {spot_price:.2f}",
-                annotation_font=dict(color=COLORS["spot"], size=11),
-                secondary_y=False,
-            )
-            fig_ts.add_trace(
-                go.Scatter(
-                    x=ts_df["Jours"],
-                    y=ts_df["Basis (%)"],
-                    name="Base (%)",
-                    line=dict(color=COLORS["basis"], width=1.5, dash="dot"),
-                ),
-                secondary_y=True,
-            )
-            if effective_days_to_maturity <= ts_max_days:
-                current_row = ts_df[ts_df["Jours"] == effective_days_to_maturity]
-                if not current_row.empty:
-                    fig_ts.add_trace(
-                        go.Scatter(
-                            x=[effective_days_to_maturity],
-                            y=[current_row["Future"].iloc[0]],
-                            mode="markers",
-                            name=f"Echeance ({effective_days_to_maturity}j)",
-                            marker=dict(color="#fcd34d", size=14, symbol="star", line=dict(width=2, color="white")),
-                        ),
-                        secondary_y=False,
-                    )
-            fig_ts.update_layout(**CHART_LAYOUT, height=500, title="Structure a terme - MASI20")
-            fig_ts.update_xaxes(title_text="Maturite (jours)")
-            fig_ts.update_yaxes(title_text="Prix future", secondary_y=False)
-            fig_ts.update_yaxes(title_text="Base (%)", secondary_y=True)
-            st.plotly_chart(fig_ts, width="stretch")
-            st.dataframe(ts_df, width="stretch", hide_index=True, height=300)
-
-    with tabs_analysis[1]:
+    if not spot_ready:
         st.markdown(
             """
-            <div class="alert-info">
-                Variation du prix future selon le spot (lignes) et le taux (colonnes).
+            <div style="text-align: center; padding: 2rem 1rem; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px;">
+                <h4 style="color: #94a3b8; margin: 0;">Spot MASI20 manquant</h4>
+                <p style="color: #64748b; margin-top: 0.6rem; font-size: 0.92rem;">
+                    Renseignez le spot dans la barre laterale pour lancer la valorisation.
+                </p>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        col_s1, col_s2, col_s3 = st.columns(3)
-        with col_s1:
-            spot_range = st.slider("Spot (+/- %)", 1.0, 20.0, 5.0, 0.5)
-        with col_s2:
-            rate_range = st.slider("Taux (+/- bps)", 10, 200, 50, 10)
-        with col_s3:
-            n_steps = st.slider("Nb. de pas", 5, 21, 11, 2)
-
-        sens_df = sensitivity_analysis(
-            spot_price,
-            r_used,
-            d_used,
-            effective_days_to_maturity,
-            spot_range_pct=spot_range,
-            rate_range_bps=rate_range,
-            n_steps=n_steps,
-        )
-        fig_heat = go.Figure(
-            data=go.Heatmap(
-                z=sens_df.values,
-                x=sens_df.columns.tolist(),
-                y=sens_df.index.tolist(),
-                colorscale=[
-                    [0, "#0f172a"],
-                    [0.25, "#1e1b4b"],
-                    [0.5, "#f59e0b"],
-                    [0.75, "#fbbf24"],
-                    [1, "#fef3c7"],
-                ],
-                text=[[f"{value:.2f}" if pd.notna(value) else "NA" for value in row] for row in sens_df.values],
-                texttemplate="%{text}",
-                textfont=dict(size=9, color="white"),
-                hoverongaps=False,
-                colorbar=dict(title=dict(text="Prix Future", font=dict(color="#94a3b8")), tickfont=dict(color="#94a3b8")),
-            )
-        )
-        fig_heat.update_layout(
-            **CHART_LAYOUT,
-            height=500,
-            title="Sensibilite du prix future",
-            xaxis_title="Variation Taux (bps)",
-            yaxis_title="Variation Spot (%)",
-        )
-        st.plotly_chart(fig_heat, width="stretch")
-        st.dataframe(sens_df, width="stretch", height=350)
-
-    with tabs_analysis[2]:
-        st.markdown("#### Detail du dividende")
-        if auto_dividend_ready and not div_details_df.empty:
-            col_d1, col_d2 = st.columns([2, 1])
-            with col_d1:
-                fig_div = go.Figure()
-                fig_div.add_trace(
-                    go.Bar(
-                        x=div_details_df["Ticker"],
-                        y=div_details_df["Contribution (%)"],
-                        marker_color=COLORS["bar1"],
-                        marker_line=dict(width=0),
-                        name="Contribution",
-                    )
-                )
-                fig_div.update_layout(
-                    **CHART_LAYOUT,
-                    height=400,
-                    title="Contribution par titre",
-                    yaxis_title="Contribution (%)",
-                )
-                st.plotly_chart(fig_div, width="stretch")
-            with col_d2:
-                st.markdown(
-                    f"""
-                    <div class="glass-metric">
-                        <div class="glow glow-green"></div>
-                        <h4>Taux total</h4>
-                        <div class="val">{div_yield * 100.0:.4f}%</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                st.markdown(
-                    f"""
-                    <div class="glass-metric" style="margin-top: 1rem;">
-                        <div class="glow glow-gold"></div>
-                        <h4>Titres avec dividende</h4>
-                        <div class="val">{len(div_details_df[div_details_df['Dividende (Di)'] > 0])}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            st.dataframe(div_details_df, width="stretch", hide_index=True)
-            fig_pie = go.Figure(
-                go.Pie(
-                    labels=div_details_df["Ticker"],
-                    values=div_details_df["Poids (pi)"],
-                    hole=0.45,
-                    marker=dict(colors=px.colors.qualitative.Pastel),
-                    textinfo="label+percent",
-                    textfont=dict(size=10),
-                )
-            )
-            fig_pie.update_layout(**CHART_LAYOUT, height=400, title="Repartition des poids")
-            st.plotly_chart(fig_pie, width="stretch")
-        else:
-            st.info(
-                "Le taux auto n'est disponible que si les 20 titres ont un cours, un dividende et une capitalisation."
-            )
-
-        st.markdown("#### Poids MASI20")
-        if not weights_details_df.empty:
-            weight_columns = [
-                column
-                for column in [
-                    "Ticker",
-                    "Capitalisation brute",
-                    "Flottant",
-                    "Plafonnement",
-                    "Capitalisation ajustee",
-                    "Capitalisation disponible",
-                    "Poids",
-                ]
-                if column in weights_details_df.columns
-            ]
-            st.dataframe(weights_details_df[weight_columns], width="stretch", hide_index=True, height=320)
-        else:
-            st.info("Aucune table de poids disponible.")
-
-    with tabs_analysis[3]:
-        st.markdown("#### Detail du calcul")
-        detail_data = {
-            "Parametre": [
-                "Source taux",
-                "Convention",
-                "Source poids",
-                "Spot (S)",
-                "Taux courbe",
-                "Taux utilise",
-                "Taux dividende (d)",
-                "Carry (r - d)",
-                "Maturite future (j)",
-                "t = jours/360",
-                "Facteur expo",
-                "(r - d) x t",
-                "e^((r - d) x t)",
-                "Prix theorique",
-                "Base (F - S)",
-                "Base (%)",
-                "Spread theorique",
-            ],
-            "Valeur": [
-                rate_source_label,
-                result["rate_basis"],
-                weights_source_label,
-                f"{result['spot']:.4f}",
-                f"{result['risk_free_rate_curve'] * 100.0:.4f}%",
-                f"{result['risk_free_rate_pricing'] * 100.0:.4f}%",
-                f"{result['dividend_yield'] * 100.0:.4f}%",
-                f"{result['cost_of_carry'] * 100.0:.4f}%",
-                f"{result['days_to_maturity']}",
-                f"{result['t_fraction']:.6f}",
-                f"{result['carry_factor']:.8f}",
-                f"{result['cost_of_carry'] * result['t_fraction']:.6f}",
-                f"{result['carry_factor']:.8f}",
-                f"{result['future_price']:.4f}",
-                f"{result['basis']:.4f}",
-                f"{result['basis_pct']:.4f}%",
-                f"{result['fair_value_spread']:.4f}",
-            ],
-        }
-        st.dataframe(pd.DataFrame(detail_data), width="stretch", hide_index=True, height=520)
-        st.markdown(
-            f"""
-            <div class="formula-box" style="margin-top: 1rem;">
-                <div class="formula-label">Formule</div>
-                <div class="formula-main" style="font-size: 1.1rem;">
-                    F = {spot_price:.2f} x e<sup>({result['risk_free_rate_pricing'] * 100.0:.4f}% - {d_used * 100.0:.4f}%) x ({effective_days_to_maturity}/360)</sup>
-                </div>
-                <div style="font-family: 'JetBrains Mono'; color: #fcd34d; font-size: 1.2rem; margin-top: 0.8rem;">
-                    F = {spot_price:.2f} x e<sup>{result['cost_of_carry'] * result['t_fraction']:.6f}</sup>
-                    = {spot_price:.2f} x {result['carry_factor']:.8f}
-                    = <strong>{result['future_price']:.4f}</strong>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with tabs_analysis[4]:
-        st.markdown("#### Export")
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            export_curve_table = build_curve_table(curve_display_df, market_curve_table)
-            pd.DataFrame(detail_data).to_excel(writer, sheet_name="Resume Pricing", index=False)
-            ts_df.to_excel(writer, sheet_name="Structure par Terme", index=False)
-            sens_df.to_excel(writer, sheet_name="Sensibilite", index=True)
-            if not div_details_df.empty:
-                div_details_df.to_excel(writer, sheet_name="Dividend Yield", index=False)
-            export_curve_table.to_excel(writer, sheet_name="Courbe des Taux", index=False)
-            if not market_curve_table.empty and rate_source != RATE_SOURCE_MARKET:
-                market_curve_table.to_excel(writer, sheet_name="Taux Source", index=False)
-            if not weights_details_df.empty:
-                weights_details_df.to_excel(writer, sheet_name="Poids Indice", index=False)
-            elif df_weights is not None:
-                df_weights.to_excel(writer, sheet_name="Poids Indice", index=False)
-        output.seek(0)
-        st.download_button(
-            "Telecharger le rapport Excel",
-            data=output,
-            file_name=f"pricing_future_masi20_{effective_eval_date.strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="stretch",
-        )
-
-
-    st.markdown(
-        """
-        <div class="section-card" style="margin-top:2rem;">
-            <div class="section-label"><span class="num">6</span> ECHEANCES</div>
-            <div class="section-heading">Vue multi-contrats</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    all_maturities = generate_maturity_schedule(datetime.combine(effective_eval_date, datetime.min.time()))
-    if all_maturities:
-        multi_records = []
-        for maturity in all_maturities:
+    elif not selected_contracts:
+        st.info("Aucun contrat trimestriel disponible pour la date de calcul choisie.")
+    else:
+        for contract in selected_contracts:
             r_maturity = interpolate_rate(
-                maturity["days"],
+                contract["days"],
                 yc_used,
-                target_maturity=maturity["days"],
+                target_maturity=contract["days"],
                 valuation_date=effective_eval_date,
             )
-            result_maturity = price_future(spot_price, r_maturity, d_used, maturity["days"])
+            result_maturity = price_future(spot_price, r_maturity, d_used, contract["days"])
             multi_records.append(
                 {
-                    "Echeance": maturity["label"],
-                    "Date": maturity["date"].strftime("%Y-%m-%d"),
-                    "Jours": maturity["days"],
-                    "Taux courbe (%)": f"{r_maturity * 100.0:.3f}",
-                    "Taux utilise (%)": f"{result_maturity['risk_free_rate_pricing'] * 100.0:.3f}",
-                    "Future": f"{result_maturity['future_price']:.2f}",
-                    "Base": f"{result_maturity['basis']:.2f}",
-                    "Base (%)": f"{result_maturity['basis_pct']:.4f}",
+                    "Contrat": contract["label"],
+                    "Date d'echeance": contract["date"].strftime("%d/%m/%Y"),
+                    "Maturite (ans)": days_to_display_years(contract["days"]),
+                    "Taux utilise (%)": round(result_maturity["risk_free_rate_pricing"] * 100.0, 4),
+                    "Prix theorique": round(result_maturity["future_price"], 4),
                 }
             )
-        multi_df = pd.DataFrame(multi_records)
-        st.dataframe(multi_df, width="stretch", hide_index=True)
 
-        fig_multi = go.Figure()
-        fig_multi.add_trace(
-            go.Bar(
-                x=[row["Echeance"] for row in multi_records],
-                y=[float(row["Future"]) for row in multi_records],
-                marker_color=[
-                    f"rgba(245, 158, 11, {0.4 + 0.6 * idx / len(multi_records)})"
-                    for idx in range(len(multi_records))
-                ],
-                marker_line=dict(width=0),
-                text=[row["Future"] for row in multi_records],
-                textposition="outside",
-                textfont=dict(color="#fcd34d", size=11, family="JetBrains Mono"),
-            )
+        st.caption(
+            f"{len(multi_records)} contrats trimestriels selectionnes a partir du {effective_eval_date.strftime('%d/%m/%Y')}."
         )
-        fig_multi.add_hline(
-            y=spot_price,
-            line_dash="dash",
-            line_color=COLORS["spot"],
-            annotation_text=f"Spot = {spot_price:.2f}",
-            annotation_font=dict(color=COLORS["spot"], size=11),
-        )
-        fig_multi.update_layout(**CHART_LAYOUT, height=400, title="MASI20 - Toutes echeances", yaxis_title="Prix")
-        st.plotly_chart(fig_multi, width="stretch")
-    else:
-        st.info("Aucune echeance disponible depuis la date de calcul.")
+        for start_idx in range(0, len(multi_records), 3):
+            contract_chunk = multi_records[start_idx:start_idx + 3]
+            chunk_columns = st.columns(len(contract_chunk))
+            for column, row in zip(chunk_columns, contract_chunk):
+                with column:
+                    st.markdown(
+                        contract_price_card(
+                            row["Contrat"],
+                            float(row["Prix theorique"]),
+                            pd.to_datetime(row["Date d'echeance"], dayfirst=True, errors="coerce"),
+                            float(row["Maturite (ans)"]),
+                            float(row["Taux utilise (%)"]),
+                        ),
+                        unsafe_allow_html=True,
+                    )
 
 
     st.markdown(

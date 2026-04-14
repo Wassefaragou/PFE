@@ -7,7 +7,9 @@ import streamlit as st
 
 from .analytics import (
     build_dashboard_alerts,
+    build_cmp_portfolio_view,
     compute_cmp_sequential,
+    compute_cmp_global_metrics,
     compute_confirmed_positions,
     compute_contract_metrics,
     compute_global_metrics,
@@ -36,10 +38,6 @@ DISPLAY_LABELS = {
     "row": "Ligne",
     "entity": "Element",
     "message": "Message",
-    "spot_index": "Indice spot",
-    "risk_free_rate": "Taux sans risque",
-    "dividend_yield": "Rendement dividende",
-    "valuation_date": "Date de valorisation",
     "default_tick_value": "Tick global",
     "default_initial_margin_per_lot": "Marge init./lot globale",
     "commission_bvc_rt": "Commission BVC AR",
@@ -51,14 +49,12 @@ DISPLAY_LABELS = {
     "expiry_date": "Echeance",
     "tick_value": "Tick",
     "initial_margin_per_lot": "Marge init./lot",
-    "settlement_price_points": "Prix settlement",
-    "is_active_lp": "LP actif",
+    "settlement_price_points": "MtM",
     "position_limit_per_contract": "Limite pos.",
     "comments": "Commentaire",
     "effective_tick_value": "Tick effectif",
     "effective_initial_margin_per_lot": "Marge effect.",
     "effective_position_limit_per_contract": "Limite effect.",
-    "theoretical_price": "Prix theorique",
     "mtm_price": "Prix MtM",
     "mtm_source": "Source MtM",
     "days_to_expiry": "Jours restants",
@@ -99,8 +95,6 @@ DISPLAY_LABELS = {
     "pnl_management_mad": "P&L economique",
     "margin_mad": "Marge",
     "leverage": "Levier",
-    "base_points": "Base pts",
-    "mispricing_points": "Mispricing pts",
     "position_limit_breach": "Limite depassee",
     "cmp_realized_total": "CMP realise",
     "cmp_final_position": "Pos. finale",
@@ -149,8 +143,8 @@ VALUE_LABELS = {
         "FLAT": "Flat",
     },
     "mtm_source": {
-        "settlement": "Settlement",
-        "theoretical": "Theorique",
+        "contract": "Referentiel",
+        "missing": "Non renseigne",
     },
     "expiry_alert": {
         "Expired": "Expire",
@@ -174,7 +168,7 @@ VALUE_LABELS = {
     },
 }
 
-POSITIVE_FLAG_COLUMNS = {"is_confirmed", "is_valid_for_calc", "is_official_for_calc", "within_tolerance", "is_active_lp"}
+POSITIVE_FLAG_COLUMNS = {"is_confirmed", "is_valid_for_calc", "is_official_for_calc", "within_tolerance"}
 NEGATIVE_FLAG_COLUMNS = {"position_limit_breach"}
 BOOLEAN_COLUMNS = POSITIVE_FLAG_COLUMNS | NEGATIVE_FLAG_COLUMNS | {
     "is_valid",
@@ -204,14 +198,11 @@ MONEY_COLUMNS = {
 POINT_COLUMNS = {
     "settlement_price_points",
     "price_points",
-    "theoretical_price",
     "mtm_price",
     "wap_buys",
     "wap_sells",
     "entry_wap",
     "delta_points",
-    "base_points",
-    "mispricing_points",
     "cmp_before",
     "cmp_after",
     "cmp_final_cost",
@@ -415,10 +406,10 @@ def _style_table_value(value: object, column: str) -> str:
             return "color: #86efac; font-weight: 700;"
     if column == "mtm_source":
         tone = str(value).strip().lower()
-        if tone == "settlement":
+        if tone == "contract":
             return "color: #fcd34d; font-weight: 700;"
-        if tone == "theoretical":
-            return "color: #93c5fd; font-weight: 700;"
+        if tone == "missing":
+            return "color: #94a3b8;"
     return ""
 
 
@@ -546,7 +537,7 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
                 <div class="sidebar-logo-mark">PnL</div>
                 <div class="sidebar-logo-text">
                     <div class="sidebar-logo-title">Index Futures Tracker</div>
-                    <div class="sidebar-logo-sub">WAP officiel, controle CMP et marge</div>
+                    <div class="sidebar-logo-sub">P&L, MtM et marge</div>
                 </div>
             </div>
             """,
@@ -557,11 +548,15 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
             contract_count = len(app_state["contracts_raw"])
             trade_count = len(app_state["transactions_raw"])
             open_contracts = (
-                int((app_state["contract_metrics"]["abs_position"] > 0).sum())
-                if not app_state["contract_metrics"].empty
+                int((app_state["cmp_portfolio"]["abs_position"] > 0).sum())
+                if not app_state["cmp_portfolio"].empty
                 else 0
             )
-            valuation_date = str(app_state["settings"].get("valuation_date", "-"))
+            mtm_count = (
+                int(app_state["contracts_priced"]["settlement_price_points"].notna().sum())
+                if not app_state["contracts_priced"].empty
+                else 0
+            )
             st.markdown("##### Vue rapide")
             st.markdown(
                 f"""
@@ -582,7 +577,7 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
                 """,
                 unsafe_allow_html=True,
             )
-            st.caption(f"Date de valorisation : {valuation_date}")
+            st.caption(f"Contrats avec MtM : {mtm_count}")
 
         st.markdown("##### Outils de donnees")
         if st.button("Reinitialiser le stockage local", width="stretch"):
@@ -702,13 +697,15 @@ def load_app_state() -> dict:
     contract_metrics = compute_contract_metrics(contracts_priced, transactions_validated, settings)
     confirmed_positions = compute_confirmed_positions(transactions_validated, contract_metrics)
     cmp_detail, cmp_summary = compute_cmp_sequential(transactions_validated, contract_metrics)
+    cmp_portfolio = build_cmp_portfolio_view(contract_metrics, cmp_summary)
     global_metrics = compute_global_metrics(contract_metrics)
+    cmp_global_metrics = compute_cmp_global_metrics(cmp_portfolio)
     alerts = build_dashboard_alerts(
         contracts_priced,
         contract_issues,
         transactions_validated,
         transaction_issues,
-        contract_metrics,
+        cmp_portfolio,
     )
 
     return {
@@ -724,6 +721,8 @@ def load_app_state() -> dict:
         "confirmed_positions": confirmed_positions,
         "cmp_detail": cmp_detail,
         "cmp_summary": cmp_summary,
+        "cmp_portfolio": cmp_portfolio,
         "global_metrics": global_metrics,
+        "cmp_global_metrics": cmp_global_metrics,
         "alerts": alerts,
     }

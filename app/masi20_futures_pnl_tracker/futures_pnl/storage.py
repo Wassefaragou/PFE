@@ -7,7 +7,6 @@ from .config import (
     CONTRACT_COLUMNS,
     DAILY_PRICE_COLUMNS,
     TRANSACTION_COLUMNS,
-    current_valuation_date_str,
     default_settings,
 )
 from .contracts import clear_contract_overrides, enrich_contract_reference
@@ -57,23 +56,28 @@ def _save_csv(path: Path, dataframe: pd.DataFrame, columns: list[str]) -> None:
     output.to_csv(path, index=False)
 
 
+def _normalize_settings_payload(payload: dict | None) -> dict:
+    raw_settings = payload or {}
+    normalized = default_settings()
+    for key in normalized:
+        if key in raw_settings:
+            normalized[key] = raw_settings[key]
+
+    return normalized
+
+
 def load_settings() -> dict:
     ensure_storage()
     if not SETTINGS_PATH.exists():
         return default_settings()
     with SETTINGS_PATH.open("r", encoding="utf-8") as handle:
         loaded = json.load(handle)
-    settings = default_settings()
-    settings.update(loaded)
-    settings["valuation_date"] = current_valuation_date_str()
-    return settings
+    return _normalize_settings_payload(loaded)
 
 
 def save_settings(settings: dict) -> None:
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    merged = default_settings()
-    merged.update(settings)
-    merged["valuation_date"] = current_valuation_date_str()
+    merged = _normalize_settings_payload(settings)
     with SETTINGS_PATH.open("w", encoding="utf-8") as handle:
         json.dump(merged, handle, indent=2)
 

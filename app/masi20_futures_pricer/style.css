@@ -707,3 +707,119 @@ hr { border-color: rgba(255, 255, 255, 0.06) !important; }
     color: #475569;
     font-size: 0.82rem;
 }
+
+.contract-price-card {
+    position: relative;
+    min-height: 250px;
+    padding: 1.15rem 1rem 1rem;
+    border-radius: 18px;
+    border: 1px solid rgba(245, 158, 11, 0.14);
+    background:
+        radial-gradient(circle at top right, rgba(245, 158, 11, 0.12), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025));
+    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.26);
+    backdrop-filter: blur(14px);
+    overflow: hidden;
+    transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.contract-price-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 22px 42px rgba(0, 0, 0, 0.32);
+    border-color: rgba(245, 158, 11, 0.24);
+}
+
+.contract-price-card-ref {
+    border-color: rgba(79, 172, 254, 0.28);
+    background:
+        radial-gradient(circle at top right, rgba(79, 172, 254, 0.16), transparent 40%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
+}
+
+.contract-price-accent {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #f59e0b, #fcd34d);
+}
+
+.contract-price-card-ref .contract-price-accent {
+    background: linear-gradient(90deg, #4facfe, #00f2fe);
+}
+
+.contract-price-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.contract-price-code {
+    color: #f8fafc;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1rem;
+    line-height: 1.4;
+    font-weight: 700;
+}
+
+.contract-price-badge {
+    padding: 0.28rem 0.58rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #dbeafe;
+    background: rgba(79, 172, 254, 0.16);
+    border: 1px solid rgba(79, 172, 254, 0.24);
+    white-space: nowrap;
+}
+
+.contract-price-value {
+    margin-top: 1rem;
+    color: #f8fafc;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+}
+
+.contract-price-subtitle {
+    margin-top: 0.2rem;
+    color: #94a3b8;
+    font-size: 0.84rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+
+.contract-price-meta {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.65rem;
+    margin-top: 1rem;
+}
+
+.contract-price-meta-item {
+    padding: 0.72rem 0.8rem;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.contract-price-meta-label {
+    display: block;
+    color: #94a3b8;
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.contract-price-meta-value {
+    display: block;
+    margin-top: 0.2rem;
+    color: #f8fafc;
+    font-size: 0.95rem;
+    font-weight: 600;
+}

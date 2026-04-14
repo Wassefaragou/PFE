@@ -1,8 +1,4 @@
 {
-  "spot_index": null,
-  "risk_free_rate": null,
-  "dividend_yield": null,
-  "valuation_date": "2026-03-25",
   "default_tick_value": null,
   "commission_bvc_rt": null,
   "commission_broker_rt": null,

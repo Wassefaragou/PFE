@@ -44,7 +44,7 @@ render_metric_cards(
 
 render_section_header(
     "Moteur officiel",
-    "Calcul officiel par contrat base sur l'agregation WAP des achats et des ventes.",
+    "Calcul officiel par contrat base sur l'agregation WAP des achats et des ventes et le MtM retenu.",
     step="01",
     label="Official",
 )
@@ -61,6 +61,7 @@ else:
         "side_label",
         "entry_wap",
         "mtm_price",
+        "mtm_source",
         "delta_points",
         "pnl_unrealized_mad",
         "matched_qty",
@@ -71,8 +72,6 @@ else:
         "notional_mad",
         "margin_mad",
         "leverage",
-        "base_points",
-        "mispricing_points",
         "expiry_alert",
     ]
     render_data_table(

@@ -21,6 +21,7 @@ Traitement du taux sans risque :
 
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import io
@@ -849,32 +850,47 @@ def generate_term_structure(
     return pd.DataFrame(records)
 
 
-def generate_maturity_schedule(reference_date: datetime = None, year: int = None) -> list:
+def _last_friday_of_month(year: int, month: int) -> datetime:
+    friday_dates = [
+        week[calendar.FRIDAY]
+        for week in calendar.monthcalendar(year, month)
+        if week[calendar.FRIDAY] != 0
+    ]
+    return datetime(year, month, friday_dates[-1])
+
+
+def generate_maturity_schedule(
+    reference_date: datetime = None,
+    year: int = None,
+    contract_count: int = 4,
+) -> list:
     """
     Genere les echeances trimestrielles des contrats futures MASI 20.
     """
     if reference_date is None:
         reference_date = datetime.now()
+    if contract_count <= 0:
+        return []
 
     maturity_months = [3, 6, 9, 12]
     month_codes = {3: "MAR", 6: "JUI", 9: "SEP", 12: "DEC"}
 
     maturities = []
-    years_to_check = [year] if year is not None else [reference_date.year, reference_date.year + 1]
+    current_year = year if year is not None else reference_date.year
 
-    for current_year in years_to_check:
+    while True:
         for month in maturity_months:
-            first_day = datetime(current_year, month, 1)
-            offset = (4 - first_day.weekday()) % 7
-            first_friday = first_day + timedelta(days=offset)
-            third_friday = first_friday + timedelta(weeks=2)
-
-            days_to = (third_friday - reference_date).days
+            maturity_date = _last_friday_of_month(current_year, month)
+            days_to = (maturity_date - reference_date).days
             if days_to > 0:
                 ticker = f"FMASI20{month_codes[month]}{str(current_year)[-2:]}"
-                maturities.append({"label": ticker, "date": third_friday, "days": days_to})
-                if year is None and len(maturities) == 4:
+                maturities.append({"label": ticker, "date": maturity_date, "days": days_to})
+                if year is None and len(maturities) >= contract_count:
                     return maturities
+
+        if year is not None:
+            return maturities
+        current_year += 1
 
     return maturities
 

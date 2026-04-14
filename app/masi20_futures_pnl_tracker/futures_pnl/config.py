@@ -13,7 +13,6 @@ CONTRACT_COLUMNS = [
     "tick_value",
     "initial_margin_per_lot",
     "settlement_price_points",
-    "is_active_lp",
     "position_limit_per_contract",
     "comments",
 ]
@@ -38,10 +37,6 @@ DAILY_PRICE_COLUMNS = [
 ]
 
 DEFAULT_SETTINGS = {
-    "spot_index": None,
-    "risk_free_rate": None,
-    "dividend_yield": None,
-    "valuation_date": "",
     "default_tick_value": None,
     "commission_bvc_rt": None,
     "commission_broker_rt": None,
@@ -83,6 +78,4 @@ def current_valuation_date_str() -> str:
 
 
 def default_settings() -> dict:
-    settings = deepcopy(DEFAULT_SETTINGS)
-    settings["valuation_date"] = current_valuation_date_str()
-    return settings
+    return deepcopy(DEFAULT_SETTINGS)

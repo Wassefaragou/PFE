@@ -265,14 +265,6 @@ def inject_home_styles() -> None:
             color: #cbd5e1;
         }
 
-        .card-hint {
-            margin-top: 1rem;
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0.03em;
-            color: var(--card-accent);
-        }
-
         .stButton > button {
             min-height: 2.85rem;
             border-radius: 16px;
@@ -314,7 +306,6 @@ def render_app_card(app_config: dict[str, object]) -> None:
             <h3>{escape(str(app_config['title']))}</h3>
             <p>{escape(str(app_config['description']))}</p>
             <div class="app-tags">{tags}</div>
-            <div class="card-hint">Acces direct</div>
         </div>
         """,
         unsafe_allow_html=True,
