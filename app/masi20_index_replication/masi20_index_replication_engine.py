@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
-import time, warnings, os
+import time, warnings, os, math, heapq
 import numpy as np
 import pandas as pd
+from itertools import combinations
 from scipy.optimize import minimize
 from sklearn.linear_model import LassoCV
 from sklearn.covariance import LedoitWolf
@@ -21,11 +22,12 @@ LASSO_SEED     = 42
 
 DE_N_RESTARTS    = 5
 DE_MAX_ITER      = 300
-DE_STRATEGY      = 'best1bin'
 DE_MUTATION      = (0.4, 1.2)
 DE_RECOMBINATION = 0.8
 DE_TOL           = 1e-9
 DE_SEED_BASE     = 42
+EXHAUSTIVE_DE_TOP_CANDIDATES = 10
+EXHAUSTIVE_DE_EXACT_LIMIT    = 250
 
 TRANSACTION_COST_BPS = 10
 
@@ -216,6 +218,128 @@ def optimize_weights_capped(X_sel, y_train, target_beta=None, max_weight=None):
     return best_w, de_info
 
 
+def evaluate_portfolio_objective(X_sel, y_train, weights, target_beta=None):
+    port_ret = X_sel @ weights
+    std_diff = np.std(port_ret - y_train)
+    penalty = 0.0
+
+    if target_beta is not None and len(y_train) > 1:
+        var_y = np.var(y_train, ddof=1)
+        if np.isfinite(var_y) and var_y > 1e-12:
+            beta = safe_beta(port_ret, y_train, default=0.0)
+            penalty += 10.0 * (beta - target_beta) ** 2
+
+    return float(std_diff + penalty)
+
+
+def compute_proxy_weights(X_sel, y_train, max_weight=None):
+    k = X_sel.shape[1]
+
+    try:
+        weights = np.linalg.lstsq(X_sel, y_train, rcond=None)[0]
+        weights = np.clip(np.asarray(weights, dtype=float), 0.0, None)
+    except Exception:
+        weights = np.ones(k, dtype=float) / k
+
+    total = np.sum(weights)
+    if total <= 1e-12:
+        weights = np.ones(k, dtype=float) / k
+    else:
+        weights = weights / total
+
+    if max_weight is not None:
+        weights = project_capped_simplex(weights, max_weight)
+
+    return weights
+
+
+def select_exhaustive_de(X_train, y_train, K, target_beta=None, max_weight=None, top_candidates=EXHAUSTIVE_DE_TOP_CANDIDATES):
+    n_stocks = X_train.shape[1]
+    if K is None or K < 1 or K > n_stocks:
+        raise ValueError(f"K invalide pour la recherche exhaustive: K={K}, univers={n_stocks}.")
+
+    combos_total = math.comb(n_stocks, K)
+    top_candidates = max(1, min(int(top_candidates), combos_total))
+    exact_all = combos_total <= EXHAUSTIVE_DE_EXACT_LIMIT
+
+    t0 = time.time()
+    finalists_heap = []
+    finalists_exact = []
+
+    for combo in combinations(range(n_stocks), K):
+        X_sub = X_train[:, combo]
+        proxy_w = compute_proxy_weights(X_sub, y_train, max_weight=max_weight)
+        proxy_obj = evaluate_portfolio_objective(X_sub, y_train, proxy_w, target_beta=target_beta)
+
+        if exact_all:
+            finalists_exact.append((proxy_obj, combo, proxy_w))
+            continue
+
+        entry = (-proxy_obj, combo, proxy_w)
+        if len(finalists_heap) < top_candidates:
+            heapq.heappush(finalists_heap, entry)
+        elif proxy_obj < -finalists_heap[0][0]:
+            heapq.heapreplace(finalists_heap, entry)
+
+    if exact_all:
+        finalists = sorted(finalists_exact, key=lambda item: item[0])
+    else:
+        finalists = sorted(
+            [(-neg_obj, combo, proxy_w) for neg_obj, combo, proxy_w in finalists_heap],
+            key=lambda item: item[0],
+        )
+
+    if not finalists:
+        raise ValueError("La recherche exhaustive n'a retourne aucun portefeuille candidat.")
+
+    best_combo = None
+    best_weights = None
+    best_obj = np.inf
+    best_de_info = None
+
+    for finalist_rank, (proxy_obj, combo, proxy_w) in enumerate(finalists, start=1):
+        X_sub = X_train[:, combo]
+        weights, de_info = optimize_weights_de_robust(
+            X_sub,
+            y_train,
+            target_beta=target_beta,
+            max_weight=max_weight,
+        )
+        final_obj = evaluate_portfolio_objective(X_sub, y_train, weights, target_beta=target_beta)
+
+        if final_obj < best_obj:
+            best_obj = final_obj
+            best_combo = combo
+            best_weights = weights
+            best_de_info = dict(de_info)
+            best_de_info['proxy_obj_value'] = proxy_obj
+            best_de_info['candidate_rank'] = finalist_rank
+            best_de_info['final_obj_value'] = final_obj
+            best_de_info['exact_all_combos'] = exact_all
+
+    scores = np.zeros(n_stocks)
+    ranks = np.zeros(n_stocks)
+    order = np.argsort(best_weights)[::-1]
+    for rank, local_pos in enumerate(order, start=1):
+        global_idx = best_combo[local_pos]
+        scores[global_idx] = best_weights[local_pos]
+        ranks[global_idx] = rank
+
+    exhaustive_info = {
+        'method': 'Exhaustive DE combinations',
+        'elapsed': time.time() - t0,
+        'n_combinations': combos_total,
+        'n_finalists': len(finalists),
+        'exact_all_combos': exact_all,
+        'proxy_method': 'OLS long-only',
+        'precomputed_weights': best_weights,
+        'precomputed_de_info': best_de_info,
+        'selected_combo': list(best_combo),
+        'obj_value': best_obj,
+    }
+    return np.array(best_combo), scores, ranks, exhaustive_info
+
+
 def prepare_data(df):
     """
     Prend un DataFrame brut (1ère col = date, 2ème col = indice, reste = actions).
@@ -252,14 +376,92 @@ def prepare_data(df):
     }
 
 
+def filter_replication_universe(data, excluded_tickers=None):
+    excluded = {
+        normalize_ticker(ticker)
+        for ticker in (excluded_tickers or [])
+        if normalize_ticker(ticker)
+    }
+    if not excluded:
+        return data
+
+    keep_mask = np.array(
+        [normalize_ticker(company) not in excluded for company in data['companies']],
+        dtype=bool,
+    )
+
+    if keep_mask.all():
+        return data
+    if not keep_mask.any():
+        raise ValueError("Aucun titre disponible apres filtrage de l'univers de replication.")
+
+    filtered = {}
+    for key, value in data.items():
+        if key in ('companies', 'tickers'):
+            filtered[key] = [item for item, keep in zip(value, keep_mask) if keep]
+        elif key in ('stock_values', 'log_returns_stocks'):
+            filtered[key] = value[:, keep_mask]
+        else:
+            filtered[key] = value
+
+    return filtered
+
+
+def select_proxy_match(X_train, y_train, K, method_label):
+    n_stocks = X_train.shape[1]
+
+    if len(y_train) == 0:
+        scores = np.zeros(n_stocks)
+    else:
+        y_ref = np.asarray(y_train, dtype=float).reshape(-1, 1)
+        scores = -np.mean(np.abs(np.asarray(X_train, dtype=float) - y_ref), axis=0)
+
+    sel_idx = np.argsort(scores)[-K:]
+    ranks = np.zeros(n_stocks)
+    for rank, idx in enumerate(np.argsort(scores)[::-1]):
+        ranks[idx] = rank + 1
+
+    info = {
+        'method': method_label,
+        'elapsed': 0.0,
+        'fallback': True,
+    }
+    return sel_idx, scores, ranks, info
+
+
 def select_lasso_cv(X_train, y_train, K):
     t0 = time.time()
+    n_samples = X_train.shape[0]
+    if n_samples < 2:
+        sel_idx, scores, ranks, lasso_info = select_proxy_match(
+            X_train,
+            y_train,
+            K,
+            method_label='Lasso fallback (train < 2)',
+        )
+        lasso_info['elapsed'] = time.time() - t0
+        lasso_info['cv_folds'] = max(n_samples, 0)
+        return sel_idx, scores, ranks, lasso_info
+
+    cv_folds = min(LASSO_CV_FOLDS, n_samples)
     lasso_cv = LassoCV(
-        cv=LASSO_CV_FOLDS, positive=True, fit_intercept=False,
+        cv=cv_folds, positive=True, fit_intercept=False,
         max_iter=LASSO_MAX_ITER, tol=LASSO_TOL,
         random_state=LASSO_SEED, n_alphas=100,
     )
-    lasso_cv.fit(X_train, y_train)
+    try:
+        lasso_cv.fit(X_train, y_train)
+    except Exception:
+        sel_idx, scores, ranks, lasso_info = select_proxy_match(
+            X_train,
+            y_train,
+            K,
+            method_label='Lasso fallback (fit failed)',
+        )
+        lasso_info['elapsed'] = time.time() - t0
+        lasso_info['cv_folds'] = cv_folds
+        return sel_idx, scores, ranks, lasso_info
+
     alpha_cv = lasso_cv.alpha_
     scores = lasso_cv.coef_.copy()
     sel_idx = np.argsort(np.abs(scores))[-K:]
@@ -269,9 +471,9 @@ def select_lasso_cv(X_train, y_train, K):
         ranks[idx] = rank + 1
 
     lasso_info = {
-        'alpha_method': 'LassoCV (5-fold CV)',
+        'alpha_method': 'LassoCV',
         'alpha_value': alpha_cv,
-        'cv_folds': LASSO_CV_FOLDS,
+        'cv_folds': cv_folds,
         'max_iter': LASSO_MAX_ITER,
         'tolerance': LASSO_TOL,
         'seed': LASSO_SEED,
@@ -827,6 +1029,14 @@ def run_rolling(data, K=None, selected_indices=None, selection_method='lasso', w
             lasso_info = {'elapsed': 0.0}
         elif selection_method == 'lasso':
             sel_idx, scores, ranks, lasso_info = select_lasso_cv(X_train, y_train, K)
+        elif selection_method == 'exhaustive_de':
+            sel_idx, scores, ranks, lasso_info = select_exhaustive_de(
+                X_train,
+                y_train,
+                K,
+                target_beta=target_beta,
+                max_weight=max_weight,
+            )
         elif selection_method == 'beta':
             sel_idx, scores, ranks, lasso_info = select_beta(X_train, y_train, K)
             lasso_info['elapsed'] = 0.0
@@ -847,6 +1057,9 @@ def run_rolling(data, K=None, selected_indices=None, selection_method='lasso', w
         if weight_method == 'manual' and selection_method == 'manual':
             weights = manual_weights
             de_info = {'elapsed': 0.0, 'obj_value': 0.0, 'n_restarts': 0, 'popsize': 0, 'maxiter': 0, 'strategy': '', 'mutation': '', 'recombination': 0, 'tolerance': 0, 'bounds': '', 'polish': False}
+        elif selection_method == 'exhaustive_de' and lasso_info.get('precomputed_weights') is not None:
+            weights = np.asarray(lasso_info['precomputed_weights'], dtype=float)
+            de_info = dict(lasso_info.get('precomputed_de_info', {}))
         else:
             weights, de_info = optimize_weights_de_robust(X_sel_train, y_train, target_beta=target_beta, max_weight=max_weight)
             
@@ -1002,6 +1215,14 @@ def run_simple_replication(data, K=None, selected_indices=None, selection_method
         lasso_info = {'elapsed': 0.0}
     elif selection_method == 'lasso':
         sel_idx, scores, ranks, lasso_info = select_lasso_cv(X_train, y_train, K)
+    elif selection_method == 'exhaustive_de':
+        sel_idx, scores, ranks, lasso_info = select_exhaustive_de(
+            X_train,
+            y_train,
+            K,
+            target_beta=target_beta,
+            max_weight=max_weight,
+        )
     elif selection_method == 'beta':
         sel_idx, scores, ranks, lasso_info = select_beta(X_train, y_train, K)
         lasso_info['elapsed'] = 0.0
@@ -1025,6 +1246,9 @@ def run_simple_replication(data, K=None, selected_indices=None, selection_method
     if weight_method == 'manual' and selection_method == 'manual':
         weights = manual_weights
         de_info = {'elapsed': 0.0, 'obj_value': 0.0}
+    elif selection_method == 'exhaustive_de' and lasso_info.get('precomputed_weights') is not None:
+        weights = np.asarray(lasso_info['precomputed_weights'], dtype=float)
+        de_info = dict(lasso_info.get('precomputed_de_info', {}))
     else:
         weights, de_info = optimize_weights_de_robust(X_sel_train, y_train, target_beta=target_beta, max_weight=max_weight)
 

@@ -222,10 +222,11 @@ section[data-testid="stSidebar"] a[data-testid="stSidebarNavLink"][aria-current=
 
 .sidebar-config-item .cfg-label {
     margin-top: 0.22rem;
-    font-size: 0.67rem;
-    letter-spacing: 0.07em;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: #64748b;
+    color: #94a3b8;
 }
 
 .hero-wrap {
@@ -493,9 +494,9 @@ div[data-testid="stForm"] {
 .glow-red    { background: linear-gradient(90deg, #ef4444, #fb7185); }
 
 .glass-metric h4 {
-    font-size: 0.75rem;
+    font-size: 0.82rem;
     font-weight: 600;
-    color: #91a0bd;
+    color: #a6b3cb;
     margin: 0;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -720,4 +721,14 @@ h2, h3 {
     text-align: center;
     color: #60708e;
     font-size: 0.78rem;
+}
+
+.sidebar-logo-sub,
+.hero-sub,
+.section-subtitle,
+.form-group-subtitle,
+.micro-note,
+.app-footer,
+div[data-testid="stCaptionContainer"] {
+    display: none !important;
 }

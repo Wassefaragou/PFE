@@ -8,10 +8,11 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-import io, time, hashlib
+import io, time, hashlib, math
 from masi20_index_replication_engine import (
     prepare_data, run_rolling, run_simple_replication, compute_rebal_schedule,
-    TRAIN_DAYS, TEST_DAYS, REBAL_DAYS, greedy_round_l2, load_factors, normalize_ticker
+    TRAIN_DAYS, TEST_DAYS, REBAL_DAYS, greedy_round_l2, load_factors,
+    normalize_ticker, filter_replication_universe
 )
 
 APP_TITLE = "MASI20 Index Replication"
@@ -109,12 +110,14 @@ def run():
         if uploaded is None:
             if prev_signature is not None:
                 clear_results()
+                reset_window_inputs()
                 del st.session_state['uploaded_signature']
             return
 
         curr_signature = get_uploaded_file_signature(uploaded)
         if prev_signature != curr_signature:
             clear_results()
+            reset_window_inputs()
             st.session_state['uploaded_signature'] = curr_signature
 
         uploaded.seek(0)
@@ -411,6 +414,7 @@ def run():
             if 'hyper_records' in result and len(result['hyper_records']) > 0:
                 method_info = result['hyper_records'][0].get('LASSO Méthode', '').lower()
                 if 'beta' in method_info: method_label = "Beta"
+                elif 'exhaustive' in method_info: method_label = "Exhaustive DE"
                 elif 'corr' in method_info and 'cap' in method_info: method_label = "Corr*Cap"
                 elif 'corr' in method_info and 'float' in method_info: method_label = "Corr*Float"
                 elif 'ledoit' in method_info or 'lw' in method_info: method_label = "LW"
@@ -505,6 +509,7 @@ def run():
             method_info = result.get('lasso_info', {}).get('method', result.get('lasso_info', {}).get('alpha_method', '')).lower()
             method_label = "Lasso"
             if 'beta' in method_info: method_label = "Beta"
+            elif 'exhaustive' in method_info: method_label = "Exhaustive DE"
             elif 'corr' in method_info and 'cap' in method_info: method_label = "Corr*Cap"
             elif 'corr' in method_info and 'float' in method_info: method_label = "Corr*Float"
             elif 'ledoit' in method_info or 'lw' in method_info: method_label = "LW"
@@ -551,6 +556,24 @@ def run():
             if key in st.session_state:
                 del st.session_state[key]
 
+    def clamp_int(value, min_value, max_value):
+        value = int(value)
+        return max(min_value, min(value, max_value))
+
+    def clamp_optional_int(value, min_value, max_value):
+        if value is None or max_value is None:
+            return None
+        return clamp_int(value, min_value, max_value)
+
+    def reset_window_inputs():
+        for key in ['window_max_days', 'train_days_input', 'test_days_input', 'rebal_days_input']:
+            if key in st.session_state:
+                del st.session_state[key]
+
+    train_days = TRAIN_DAYS
+    test_days = TEST_DAYS
+    rebal_days = REBAL_DAYS
+
     with st.sidebar:
         st.markdown(f"""
         <div class="sidebar-logo" style="display: flex; align-items: center; margin-bottom: 20px;">
@@ -563,20 +586,72 @@ def run():
 
         mode = st.radio(
             "**Mode**",
-            ["🔄 Backtest", "📌 Simple"],
-            help="Backtest : rolling window avec test OOS.\nSimple : un seul portefeuille.",
+            ["Backtest", "Simple"],
             on_change=clear_results
         )
 
         st.markdown("---")
-        st.markdown("##### ⚙️ Fenêtres")
+        st.markdown("##### Fenetres")
         
-        # UI defaults come from engine constants
-        train_days = st.slider("Train (jours)", min_value=5, max_value=252, value=TRAIN_DAYS, step=1, on_change=clear_results)
+        window_max_days = st.session_state.get('window_max_days')
+        has_data_window = window_max_days is not None
+        if has_data_window:
+            window_max_days = max(1, int(window_max_days))
+
+        train_default = clamp_optional_int(st.session_state.get('train_days_input'), 1, window_max_days)
+        if st.session_state.get('train_days_input') != train_default:
+            st.session_state['train_days_input'] = train_default
+
+        train_days = st.number_input(
+            "Train (jours)",
+            min_value=1 if has_data_window else None,
+            max_value=window_max_days if has_data_window else None,
+            value=train_default,
+            step=1,
+            key='train_days_input',
+            placeholder="NaN" if not has_data_window else f"1 a {window_max_days}",
+            disabled=not has_data_window,
+            on_change=clear_results
+        )
         
         if "Backtest" in mode:
-            test_days = st.slider("Test OOS (jours)", min_value=5, max_value=60, value=TEST_DAYS, step=1, on_change=clear_results)
-            rebal_days = st.slider("Rebal (jours)", min_value=5, max_value=60, value=REBAL_DAYS, step=1, on_change=clear_results)
+            remaining_days = None
+            if has_data_window and train_days is not None:
+                remaining_days = window_max_days - int(train_days)
+
+            oos_ready = remaining_days is not None and remaining_days > 15
+            oos_max_days = remaining_days if oos_ready else None
+
+            test_default = clamp_optional_int(st.session_state.get('test_days_input'), 15, oos_max_days)
+            if st.session_state.get('test_days_input') != test_default:
+                st.session_state['test_days_input'] = test_default
+
+            rebal_default = clamp_optional_int(st.session_state.get('rebal_days_input'), 15, oos_max_days)
+            if st.session_state.get('rebal_days_input') != rebal_default:
+                st.session_state['rebal_days_input'] = rebal_default
+
+            test_days = st.number_input(
+                "Test OOS (jours)",
+                min_value=15 if oos_ready else None,
+                max_value=oos_max_days if oos_ready else None,
+                value=test_default,
+                step=1,
+                key='test_days_input',
+                placeholder="NaN" if not oos_ready else f"15 a {oos_max_days}",
+                disabled=not oos_ready,
+                on_change=clear_results
+            )
+            rebal_days = st.number_input(
+                "Rebal (jours)",
+                min_value=15 if oos_ready else None,
+                max_value=oos_max_days if oos_ready else None,
+                value=rebal_default,
+                step=1,
+                key='rebal_days_input',
+                placeholder="NaN" if not oos_ready else f"15 a {oos_max_days}",
+                disabled=not oos_ready,
+                on_change=clear_results
+            )
 
 
     # ══════════════════════════════════════════════════════════════
@@ -631,9 +706,42 @@ def run():
                 st.markdown(f'<div class="alert-error">❌ Le fichier doit avoir <strong>au moins 3 colonnes</strong> : Date, Indice et 1 titre. Actuel : <strong>{raw_df.shape[1]}</strong>.</div>', unsafe_allow_html=True)
                 st.stop()
 
+            atw_available = 'ATW' in data['companies']
+            include_atw = st.checkbox(
+                "Inclure Attijari (ATW) dans le portefeuille de replication",
+                value=atw_available,
+                disabled=not atw_available,
+                help="Decochez pour exclure ATW de la selection automatique et manuelle.",
+                on_change=clear_results
+            )
+            if not atw_available:
+                st.markdown('<div class="alert-info">ATW est absente du fichier importe.</div>', unsafe_allow_html=True)
+
+            data = filter_replication_universe(
+                data,
+                excluded_tickers=[] if include_atw else ['ATW']
+            )
+
+            if atw_available and not include_atw:
+                st.markdown('<div class="alert-info">ATW est exclue de l\'univers de replication pour cette execution.</div>', unsafe_allow_html=True)
+
             n_days = len(data['dates'])
             n_actions = len(data['companies'])
             idx_name = data.get('index_name')
+
+            if st.session_state.get('window_max_days') != n_days:
+                st.session_state['window_max_days'] = n_days
+                if st.session_state.get('train_days_input') is not None:
+                    st.session_state['train_days_input'] = clamp_int(st.session_state['train_days_input'], 1, n_days)
+                if 'test_days_input' in st.session_state:
+                    st.session_state['test_days_input'] = None
+                if 'rebal_days_input' in st.session_state:
+                    st.session_state['rebal_days_input'] = None
+                st.rerun()
+
+            if n_actions == 0:
+                st.markdown('<div class="alert-error">Aucun titre disponible pour la replication avec ce filtrage.</div>', unsafe_allow_html=True)
+                st.stop()
 
             c1, c2, c3, c4 = st.columns(4)
             with c1:
@@ -677,7 +785,7 @@ def run():
                 st.session_state['user_k'] = user_k
                 
             with col_sel:
-                selection_options = ["Lasso", "Beta"]
+                selection_options = ["Lasso", "Beta", "Exhaustive DE"]
                 if factor_methods_available:
                     selection_options.extend(["Corr × Cap", "Corr × Flottant"])
                 selection_options.extend(["Ledoit-Wolf", "Manuelle"])
@@ -692,6 +800,8 @@ def run():
                     selection_method = "lasso"
                 elif selection_method_choice == "Beta":
                     selection_method = "beta"
+                elif selection_method_choice == "Exhaustive DE":
+                    selection_method = "exhaustive_de"
                 elif selection_method_choice == "Corr × Cap":
                     selection_method = "corr_cap"
                 elif selection_method_choice == "Corr × Flottant":
@@ -707,6 +817,13 @@ def run():
                     unsafe_allow_html=True,
                 )
                     
+            if selection_method == "exhaustive_de":
+                combos_count = math.comb(n_actions, int(user_k))
+                st.markdown(
+                    f'<div class="alert-warning">Recherche exhaustive active : {combos_count:,} combinaisons seront analysees sur chaque fenetre, puis le DE affinera les meilleurs candidats.</div>',
+                    unsafe_allow_html=True,
+                )
+
             selected_titles = []
             if selection_method == "manual":
                 selected_titles = st.multiselect(
@@ -803,7 +920,50 @@ def run():
             if not weights_valid:
                 st.stop()
 
+            if train_days is None:
+                st.markdown('<div class="alert-info">Renseignez la fenetre Train.</div>', unsafe_allow_html=True)
+                st.stop()
+
+            train_days = int(train_days)
+            if train_days < 2:
+                st.markdown(
+                    '<div class="alert-error">Train doit etre au moins egal a 2 jours. Avec 1 seul jour, la selection et la tracking error ne sont pas exploitables.</div>',
+                    unsafe_allow_html=True
+                )
+                st.stop()
+
             is_backtest = "Backtest" in mode
+
+            if is_backtest:
+                remaining_after_train = n_days - train_days
+                if remaining_after_train <= 15:
+                    st.markdown(
+                        f'<div class="alert-error">Train trop grand : avec {train_days} jours de train sur une base de {n_days} jours, il reste {remaining_after_train} jour(s). Le reliquat doit etre strictement superieur a 15 jours.</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.stop()
+
+                if test_days is None or rebal_days is None:
+                    st.markdown('<div class="alert-info">Renseignez les fenetres Test OOS et Rebal.</div>', unsafe_allow_html=True)
+                    st.stop()
+
+                test_days = int(test_days)
+                rebal_days = int(rebal_days)
+
+                if not (15 <= test_days <= remaining_after_train):
+                    st.markdown(
+                        f'<div class="alert-error">Test OOS doit etre dans l\'intervalle [15, {remaining_after_train}] jours.</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.stop()
+
+                if not (15 <= rebal_days <= remaining_after_train):
+                    st.markdown(
+                        f'<div class="alert-error">Rebal doit etre dans l\'intervalle [15, {remaining_after_train}] jours.</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.stop()
+
             min_required = train_days + test_days if is_backtest else 10
 
             if n_days < min_required:

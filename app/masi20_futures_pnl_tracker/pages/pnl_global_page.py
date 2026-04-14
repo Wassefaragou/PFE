@@ -67,7 +67,7 @@ def _ranked_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
     base = alt.Chart(chart_data)
     zero_rule = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color=ZERO_LINE, strokeDash=[6, 4]).encode(x="x:Q")
     bars = base.mark_bar(cornerRadiusEnd=6, cornerRadiusTopLeft=6, cornerRadiusBottomLeft=6, size=28).encode(
-        x=alt.X("pnl_management_mad:Q", title="P&L economique (MAD)", axis=alt.Axis(format="~s")),
+        x=alt.X("pnl_management_mad:Q", title="P&L net (MAD)", axis=alt.Axis(format="~s")),
         y=alt.Y("contract_code:N", title=None, sort=order, axis=alt.Axis(labelFontSize=12, labelLimit=200)),
         color=alt.condition(
             "datum.pnl_management_mad >= 0",
@@ -76,7 +76,7 @@ def _ranked_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
         ),
         tooltip=[
             alt.Tooltip("contract_code:N", title="Contrat"),
-            alt.Tooltip("pnl_management_mad:Q", title="P&L economique", format=",.2f"),
+            alt.Tooltip("pnl_management_mad:Q", title="P&L net", format=",.2f"),
             alt.Tooltip("abs_position:Q", title="Position", format=",.0f"),
             alt.Tooltip("source_label:N", title="Source MtM"),
             alt.Tooltip("leverage:Q", title="Levier", format=",.2f"),
@@ -145,7 +145,7 @@ def _capital_scatter_chart(dataframe: pd.DataFrame) -> alt.Chart:
     ].copy()
     circles = alt.Chart(chart_data).mark_circle(opacity=0.85, stroke="#0b0f19", strokeWidth=2).encode(
         x=alt.X("margin_mad:Q", title="Marge (MAD)", axis=alt.Axis(format="~s")),
-        y=alt.Y("notional_mad:Q", title="Exposition ouverte (MAD)", axis=alt.Axis(format="~s")),
+        y=alt.Y("notional_mad:Q", title="Exposition brute (MAD)", axis=alt.Axis(format="~s")),
         size=alt.Size(
             "abs_position:Q",
             title="Position (lots)",
@@ -161,8 +161,8 @@ def _capital_scatter_chart(dataframe: pd.DataFrame) -> alt.Chart:
         ),
         tooltip=[
             alt.Tooltip("contract_code:N", title="Contrat"),
-            alt.Tooltip("margin_mad:Q", title="Marge", format=",.2f"),
-            alt.Tooltip("notional_mad:Q", title="Exposition ouverte", format=",.2f"),
+            alt.Tooltip("margin_mad:Q", title="Marge mobilisee", format=",.2f"),
+            alt.Tooltip("notional_mad:Q", title="Exposition brute", format=",.2f"),
             alt.Tooltip("abs_position:Q", title="Position", format=",.0f"),
             alt.Tooltip("leverage:Q", title="Levier", format=",.2f"),
             alt.Tooltip("side_label:N", title="Sens"),
@@ -226,7 +226,7 @@ def _mtm_source_chart(dataframe: pd.DataFrame) -> alt.Chart:
         value_name="amount",
     )
     chart_data["metric_label"] = chart_data["metric"].map(
-        {"pnl_management_mad": "P&L economique", "margin_mad": "Marge"}
+        {"pnl_management_mad": "P&L net", "margin_mad": "Marge mobilisee"}
     )
     base = alt.Chart(chart_data)
     bars = base.mark_bar(cornerRadiusEnd=6, size=26).encode(
@@ -237,7 +237,7 @@ def _mtm_source_chart(dataframe: pd.DataFrame) -> alt.Chart:
             "metric_label:N",
             title="Mesure",
             scale=alt.Scale(
-                domain=["P&L economique", "Marge"],
+                domain=["P&L net", "Marge mobilisee"],
                 range=[ACCENT_GOLD, ACCENT_PURPLE],
             ),
         ),
@@ -276,25 +276,25 @@ render_hero(
 
 render_metric_cards(
     [
-        {"label": "P&L economique", "value": format_currency(global_metrics["total_management_pnl"]), "glow": "gold"},
+        {"label": "P&L net", "value": format_currency(global_metrics["total_management_pnl"]), "glow": "gold"},
         {"label": "P&L latent", "value": format_currency(global_metrics["total_unrealized_pnl"]), "glow": "blue"},
         {"label": "P&L realise", "value": format_currency(global_metrics["total_realized_pnl"]), "glow": "green"},
-        {"label": "P&L comptable", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
+        {"label": "P&L WAP", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
         {"label": "Commissions", "value": format_currency(global_metrics["total_commissions"]), "glow": "red"},
-        {"label": "Exposition ouverte (abs.)", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
-        {"label": "Exposition nette (signee)", "value": format_currency(global_metrics["total_net_notional"]), "glow": "purple"},
-        {"label": "Marge", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
-        {"label": "Levier", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
+        {"label": "Exposition brute", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
+        {"label": "Exposition nette", "value": format_currency(global_metrics["total_net_notional"]), "glow": "purple"},
+        {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
+        {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "ROI marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
         {"label": "Contrats ouverts", "value": str(active_contracts), "glow": "purple"},
-        {"label": "Contrats gagnants", "value": str(profitable_contracts), "glow": "green"},
+        {"label": "Contrats en gain", "value": str(profitable_contracts), "glow": "green"},
         {"label": "Contrats avec MtM", "value": str(contracts_with_mtm), "glow": "blue"},
     ],
     columns=5,
 )
 
 render_section_header(
-    "Pilotage portefeuille",
+    "Synthese globale",
     "Visualisations clarifiees du P&L, du capital engage par contrat et de la couverture MtM.",
     step="01",
     label="Global",
@@ -356,10 +356,10 @@ else:
         )
         pnl_col, breakdown_col = st.columns(2)
         with pnl_col:
-            st.subheader("Classement P&L economique")
+            st.subheader("Classement P&L net")
             st.altair_chart(_ranked_pnl_chart(ordered_metrics), width="stretch")
         with breakdown_col:
-            st.subheader("Structure realisee vs latente")
+            st.subheader("Repartition realise / latent")
             st.altair_chart(_realized_vs_unrealized_chart(ordered_metrics), width="stretch")
 
     with capital_tab:
@@ -378,16 +378,16 @@ else:
             ],
             label_overrides={
                 "cmp_value": "CMP",
-                "notional_mad": "Exposition ouverte (abs.)",
-                "signed_notional_mad": "Exposition nette (signee)",
+                "notional_mad": "Exposition brute",
+                "signed_notional_mad": "Exposition nette",
             },
         )
         capital_col, leverage_col = st.columns(2)
         with capital_col:
-            st.subheader("Carte marge / exposition ouverte")
+            st.subheader("Carte marge / exposition")
             st.altair_chart(_capital_scatter_chart(ordered_metrics), width="stretch")
         with leverage_col:
-            st.subheader("Classement du levier")
+            st.subheader("Classement levier")
             st.altair_chart(_leverage_chart(ordered_metrics), width="stretch")
 
     with mtm_tab:
@@ -406,7 +406,7 @@ else:
         with summary_col:
             render_data_table(mtm_summary)
         with composition_col:
-            st.subheader("Impact par couverture MtM")
+            st.subheader("Impact par source MtM")
             st.altair_chart(_mtm_source_chart(mtm_summary), width="stretch")
 
 render_footer()

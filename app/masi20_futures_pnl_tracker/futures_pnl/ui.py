@@ -16,14 +16,7 @@ from .analytics import (
 )
 from .config import APP_TITLE, CONTRACT_COLUMNS, TRANSACTION_COLUMNS
 from .pricing import compute_theoretical_prices
-from .storage import (
-    STORAGE_DIR,
-    ensure_storage,
-    load_contracts,
-    load_settings,
-    load_transactions,
-    reset_storage,
-)
+from .storage import ensure_storage, load_contracts, load_settings, load_transactions, reset_storage
 from .validators import validate_contracts, validate_transactions
 
 STYLE_PATH = Path(__file__).resolve().parents[1] / "style.css"
@@ -69,48 +62,48 @@ DISPLAY_LABELS = {
     "counterparty": "Contrepartie",
     "counterparty_type": "Type cpty",
     "status": "Statut",
-    "notional_mad": "Notionnel MAD",
-    "signed_notional_mad": "Notionnel net MAD",
+    "notional_mad": "Exposition brute",
+    "signed_notional_mad": "Exposition nette",
     "is_confirmed": "Confirmee",
     "is_valid_for_calc": "Valide calcul",
     "is_official_for_calc": "Inclus P&L officiel",
-    "total_buys_lots": "Achat lots",
-    "total_sells_lots": "Vente lots",
+    "total_buys_lots": "Lots achetes",
+    "total_sells_lots": "Lots vendus",
     "official_net_position": "Pos. officielle",
     "confirmed_net_position": "Pos. confirmee",
     "net_position": "Pos. nette",
     "delta_vs_all": "Ecart vs officiel",
-    "side_label": "Sens net",
+    "side_label": "Sens",
     "direction": "Direction",
-    "abs_position": "Pos. abs.",
-    "wap_buys": "WAP achat",
-    "wap_sells": "WAP vente",
-    "entry_wap": "WAP entree",
+    "abs_position": "Position ouverte",
+    "wap_buys": "PRU achats",
+    "wap_sells": "PRU ventes",
+    "entry_wap": "PRU net",
     "delta_points": "Delta pts",
     "pnl_unrealized_mad": "P&L latent",
-    "matched_qty": "Qte matchee",
+    "matched_qty": "Quantite cloturee",
     "pnl_realized_mad": "P&L realise",
-    "pnl_accounting_mad": "P&L comptable",
+    "pnl_accounting_mad": "P&L WAP",
     "commissions_mad": "Commissions",
-    "pnl_management_mad": "P&L economique",
-    "margin_mad": "Marge",
-    "leverage": "Levier",
+    "pnl_management_mad": "P&L net",
+    "margin_mad": "Marge mobilisee",
+    "leverage": "Effet de levier",
     "position_limit_breach": "Limite depassee",
     "cmp_realized_total": "CMP realise",
-    "cmp_final_position": "Pos. finale",
-    "cmp_final_cost": "CMP final",
+    "cmp_final_position": "Position finale",
+    "cmp_final_cost": "CMP",
     "cmp_unrealized": "CMP latent",
     "cmp_total": "CMP total",
-    "wap_accounting_total": "WAP comptable",
-    "difference_vs_wap": "Ecart CMP/WAP",
+    "wap_accounting_total": "P&L WAP",
+    "difference_vs_wap": "Ecart vs WAP",
     "within_tolerance": "Tol. OK",
-    "signed_qty": "Qte signee",
-    "pos_before": "Pos. avant",
+    "signed_qty": "Quantite signee",
+    "pos_before": "Position avant",
     "cmp_before": "CMP avant",
-    "closed_qty": "Qte cloturee",
+    "closed_qty": "Quantite cloturee",
     "trade_realized_pnl": "P&L realise trade",
-    "pos_after": "Pos. apres",
-    "cmp_after": "CMP apres",
+    "pos_after": "Position apres",
+    "cmp_after": "CMP apres trade",
     "date": "Date",
     "contract_count": "Nb contrats",
     "nb_transactions": "Nb transactions",
@@ -140,7 +133,7 @@ VALUE_LABELS = {
     "side_label": {
         "LONG": "Long",
         "SHORT": "Short",
-        "FLAT": "Flat",
+        "FLAT": "Neutre",
     },
     "mtm_source": {
         "contract": "Referentiel",
@@ -537,7 +530,6 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
                 <div class="sidebar-logo-mark">PnL</div>
                 <div class="sidebar-logo-text">
                     <div class="sidebar-logo-title">Index Futures Tracker</div>
-                    <div class="sidebar-logo-sub">P&L, MtM et marge</div>
                 </div>
             </div>
             """,
@@ -552,12 +544,7 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
                 if not app_state["cmp_portfolio"].empty
                 else 0
             )
-            mtm_count = (
-                int(app_state["contracts_priced"]["settlement_price_points"].notna().sum())
-                if not app_state["contracts_priced"].empty
-                else 0
-            )
-            st.markdown("##### Vue rapide")
+            st.markdown("##### Synthese")
             st.markdown(
                 f"""
                 <div class="sidebar-config-grid">
@@ -571,20 +558,17 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
                     </div>
                     <div class="sidebar-config-item">
                         <div class="cfg-val">{open_contracts}</div>
-                        <div class="cfg-label">Pos. ouvertes</div>
+                        <div class="cfg-label">Positions ouvertes</div>
                     </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            st.caption(f"Contrats avec MtM : {mtm_count}")
 
-        st.markdown("##### Outils de donnees")
-        if st.button("Reinitialiser le stockage local", width="stretch"):
+        st.markdown("##### Donnees")
+        if st.button("Reinitialiser les donnees locales", width="stretch"):
             reset_storage()
             st.rerun()
-        st.caption("Stockage local, generique et vide au demarrage.")
-        st.caption(f"Dossier : {STORAGE_DIR}")
 
 
 def show_issues(title: str, issues_df: pd.DataFrame) -> None:

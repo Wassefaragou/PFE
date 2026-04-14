@@ -68,7 +68,7 @@ def _dashboard_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
         value_name="amount",
     )
     labels_map = {
-        "pnl_management_mad": "P&L economique",
+        "pnl_management_mad": "P&L net",
         "pnl_unrealized_mad": "P&L latent",
         "pnl_realized_mad": "P&L realise",
     }
@@ -87,7 +87,7 @@ def _dashboard_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
             "component_label:N",
             title="Composante",
             scale=alt.Scale(
-                domain=["P&L economique", "P&L latent", "P&L realise"],
+                domain=["P&L net", "P&L latent", "P&L realise"],
                 range=[ACCENT_GOLD, ACCENT_BLUE, POSITIVE_COLOR],
             ),
         ),
@@ -117,7 +117,7 @@ def _dashboard_capital_chart(dataframe: pd.DataFrame) -> alt.Chart:
         var_name="metric",
         value_name="amount",
     )
-    labels_map = {"margin_mad": "Marge", "notional_mad": "Exposition ouverte"}
+    labels_map = {"margin_mad": "Marge mobilisee", "notional_mad": "Exposition brute"}
     chart_data["metric_label"] = chart_data["metric"].map(labels_map)
 
     base = alt.Chart(chart_data)
@@ -129,7 +129,7 @@ def _dashboard_capital_chart(dataframe: pd.DataFrame) -> alt.Chart:
             "metric_label:N",
             title="Mesure",
             scale=alt.Scale(
-                domain=["Marge", "Exposition ouverte"],
+                domain=["Marge mobilisee", "Exposition brute"],
                 range=[ACCENT_PURPLE, ACCENT_BLUE],
             ),
         ),
@@ -173,13 +173,13 @@ render_hero(
 
 render_metric_cards(
     [
-        {"label": "P&L economique", "value": format_currency(global_metrics["total_management_pnl"]), "glow": "gold"},
-        {"label": "P&L comptable", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
+        {"label": "P&L net", "value": format_currency(global_metrics["total_management_pnl"]), "glow": "gold"},
+        {"label": "P&L WAP", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
         {"label": "P&L latent", "value": format_currency(global_metrics["total_unrealized_pnl"]), "glow": "blue"},
         {"label": "P&L realise", "value": format_currency(global_metrics["total_realized_pnl"]), "glow": "green"},
-        {"label": "Exposition ouverte (abs.)", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
-        {"label": "Exposition nette (signee)", "value": format_currency(global_metrics["total_net_notional"]), "glow": "purple"},
-        {"label": "Marge totale", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
+        {"label": "Exposition brute", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
+        {"label": "Exposition nette", "value": format_currency(global_metrics["total_net_notional"]), "glow": "purple"},
+        {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
         {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "Commissions", "value": format_currency(global_metrics["total_commissions"]), "glow": "red"},
         {"label": "ROI marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
@@ -188,7 +188,7 @@ render_metric_cards(
 )
 
 render_section_header(
-    "Radar portefeuille",
+    "Vue portefeuille",
     "Alertes, etat des donnees et lecture rapide des positions.",
     step="01",
     label="Dashboard",
@@ -204,7 +204,7 @@ with col_alerts:
             render_status_box(alert["message"], kind=alert["severity"])
 
 with col_health:
-    st.subheader("Vue rapide")
+    st.subheader("Chiffres cles")
     st.metric("Contrats", len(state["contracts_raw"]))
     st.metric("Transactions", len(state["transactions_raw"]))
     st.metric(
@@ -213,7 +213,7 @@ with col_health:
     )
 
 render_section_header(
-    "Synthese portefeuille",
+    "Portefeuille par contrat",
     "Vue P&L par contrat avec CMP, MtM, marge et alertes de limite.",
     step="02",
     label="Portfolio",
@@ -243,7 +243,7 @@ else:
         ],
         label_overrides={
             "cmp_value": "CMP",
-            "signed_notional_mad": "Exposition nette (signee)",
+            "signed_notional_mad": "Exposition nette",
         },
     )
 
@@ -252,11 +252,11 @@ else:
         st.subheader("P&L par contrat")
         st.altair_chart(_dashboard_pnl_chart(contract_metrics), width="stretch")
     with chart_col_right:
-        st.subheader("Efficacite du capital")
+        st.subheader("Capital engage")
         st.altair_chart(_dashboard_capital_chart(contract_metrics), width="stretch")
 
 render_section_header(
-    "Lecture CMP",
+    "CMP par contrat",
     "Lecture rapide du vrai CMP par contrat ouvert.",
     step="03",
     label="CMP",
@@ -277,11 +277,13 @@ else:
         ],
         label_overrides={
             "cmp_value": "CMP",
+            "abs_position": "Position",
+            "delta_points": "Ecart MtM/CMP",
         },
     )
 
 render_section_header(
-    "Vue confirmee",
+    "Positions confirmees",
     "Cette vue est informative uniquement et ne remplace jamais le moteur officiel.",
     step="04",
     label="Informative",

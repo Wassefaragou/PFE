@@ -9,7 +9,7 @@ import streamlit.components.v1 as components
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 NAVIGATION_STATE_KEY = "selected_app"
 FAVICON_URL = "https://www.google.com/s2/favicons?domain=attijariwafabank.com&sz=128"
-HOME_APP_TITLE = "Plateforme MASI20"
+HOME_APP_TITLE = "Plateforme FUTURES MASI20"
 HOME_APP_SUBTITLE = "Choisissez l'outil que vous voulez ouvrir."
 
 for subdir in (
@@ -30,36 +30,18 @@ APP_REGISTRY = {
     "pnl_tracker": {
         "eyebrow": "Desk Monitoring",
         "title": "MASI20 Futures PnL Tracker",
-        "description": "Contrats, positions et P&L.",
-        "highlights": [
-            "contrats",
-            "transactions",
-            "p&l",
-        ],
         "accent": "#f59e0b",
         "runner": run_pnl_tracker,
     },
     "futures_pricer": {
         "eyebrow": "Pricing Engine",
         "title": "MASI20 Futures Pricer",
-        "description": "Fair value, taux et sensibilites.",
-        "highlights": [
-            "courbe des taux",
-            "fair value",
-            "sensibilite",
-        ],
         "accent": "#4facfe",
         "runner": run_futures_pricer,
     },
     "index_replication": {
         "eyebrow": "Portfolio Lab",
         "title": "MASI20 Index Replication",
-        "description": "Backtests, selection et allocation.",
-        "highlights": [
-            "backtests",
-            "selection",
-            "allocation",
-        ],
         "accent": "#00d4aa",
         "runner": run_index_replication,
     },
@@ -177,8 +159,8 @@ def inject_home_styles() -> None:
 
         .app-card {
             position: relative;
-            min-height: 262px;
-            padding: 1.15rem 1.1rem 1rem;
+            min-height: 154px;
+            padding: 1.15rem 1.1rem 1.1rem;
             border-radius: 22px;
             border: 1px solid var(--glass-border);
             background:
@@ -186,6 +168,9 @@ def inject_home_styles() -> None:
             box-shadow: 0 18px 42px rgba(0, 0, 0, 0.22);
             backdrop-filter: blur(14px);
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
             transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
         }
 
@@ -241,30 +226,6 @@ def inject_home_styles() -> None:
             letter-spacing: -0.03em;
         }
 
-        .app-card p {
-            margin: 1rem 0 0;
-            max-width: 270px;
-            font-size: 0.92rem;
-            line-height: 1.6;
-            color: var(--text-muted);
-        }
-
-        .app-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            margin-top: 1rem;
-        }
-
-        .app-tags span {
-            padding: 0.34rem 0.62rem;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.07);
-            font-size: 0.72rem;
-            color: #cbd5e1;
-        }
-
         .stButton > button {
             min-height: 2.85rem;
             border-radius: 16px;
@@ -295,17 +256,11 @@ def inject_home_styles() -> None:
 
 
 def render_app_card(app_config: dict[str, object]) -> None:
-    tags = "".join(
-        f"<span>{escape(str(tag))}</span>"
-        for tag in app_config["highlights"]  # type: ignore[index]
-    )
     st.markdown(
         f"""
         <div class="app-card" style="--card-accent: {app_config['accent']};">
             <div class="app-eyebrow">{escape(str(app_config['eyebrow']))}</div>
             <h3>{escape(str(app_config['title']))}</h3>
-            <p>{escape(str(app_config['description']))}</p>
-            <div class="app-tags">{tags}</div>
         </div>
         """,
         unsafe_allow_html=True,
