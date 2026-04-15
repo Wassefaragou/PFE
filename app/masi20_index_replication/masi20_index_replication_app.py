@@ -1,8 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Streamlit App — Réplication MASI 20
-UI Premium — Glassmorphism + Micro-animations
-"""
 import streamlit as st
 import pandas as pd
 import numpy as np

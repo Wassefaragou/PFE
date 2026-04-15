@@ -1,23 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-==============================================================================
-MOTEUR DE PRICING - FUTURES MASI 20
-==============================================================================
-
-Cours theorique du contrat a terme sur l'indice MASI 20 :
-    F = S x e^((r - d) x t)
-
-Convention de temps :
-    t = jours / 360
-
-Traitement du taux sans risque :
-    - les quotes de marche sont normalisees sur une meme base de taux
-    - l'interpolation se fait lineairement sur les taux homogenises
-    - l'extrapolation prolonge lineairement la pente du premier/dernier segment
-    - le taux retourne est ensuite exprime dans la convention cible :
-        * <= 365 jours : taux monetaire ACT/360
-        * > 365 jours  : taux actuariel annuel ACT/365
-"""
 
 from __future__ import annotations
 
