@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from datetime import date, datetime
 from html import escape
 from pathlib import Path
 
@@ -78,36 +80,36 @@ DISPLAY_LABELS = {
     "abs_position": "Position ouverte",
     "wap_buys": "PRU achats",
     "wap_sells": "PRU ventes",
-    "entry_wap": "PRU net",
-    "delta_points": "Delta pts",
+    "entry_wap": "CMP WAP",
+    "delta_points": "Ecart MtM/CMP WAP",
     "pnl_unrealized_mad": "P&L latent",
     "matched_qty": "Quantite cloturee",
-    "pnl_realized_mad": "P&L realise",
-    "pnl_accounting_mad": "P&L WAP",
+    "pnl_realized_mad": "P&L réalisé",
+    "pnl_accounting_mad": "P&L comptable",
     "commissions_mad": "Commissions",
-    "pnl_management_mad": "P&L net",
-    "margin_mad": "Marge mobilisee",
+    "pnl_management_mad": "P&L économique",
+    "margin_mad": "Marge mobilisée",
     "leverage": "Effet de levier",
-    "position_limit_breach": "Limite depassee",
-    "cmp_realized_total": "CMP realise",
+    "position_limit_breach": "Limite dépassée",
+    "cmp_realized_total": "CMP réalisé",
     "cmp_final_position": "Position finale",
-    "cmp_final_cost": "CMP",
-    "cmp_unrealized": "CMP latent",
-    "cmp_total": "CMP total",
-    "wap_accounting_total": "P&L WAP",
+    "cmp_final_cost": "CMP sequentiel",
+    "cmp_unrealized": "P&L latent sequentiel",
+    "cmp_total": "P&L total sequentiel",
+    "wap_accounting_total": "P&L total WAP",
     "difference_vs_wap": "Ecart vs WAP",
     "within_tolerance": "Tol. OK",
     "signed_qty": "Quantite signee",
     "pos_before": "Position avant",
-    "cmp_before": "CMP avant",
+    "cmp_before": "CMP seq avant",
     "closed_qty": "Quantite cloturee",
-    "trade_realized_pnl": "P&L realise trade",
-    "pos_after": "Position apres",
-    "cmp_after": "CMP apres trade",
+    "trade_realized_pnl": "P&L réalisé trade",
+    "pos_after": "Position après",
+    "cmp_after": "CMP après trade",
     "date": "Date",
     "contract_count": "Nb contrats",
     "nb_transactions": "Nb transactions",
-    "quantite_totale": "Quantite totale",
+    "quantite_totale": "Quantité totale",
     "notionnel_total_mad": "Notionnel total MAD",
     "inclus_pnl_officiel": "Nb inclus P&L officiel",
     "daily_delta": "Delta jour",
@@ -117,6 +119,8 @@ DISPLAY_LABELS = {
     "round_trip_fee_per_lot": "Frais AR / lot",
     "is_valid": "Ligne valide",
     "chrono_key": "Cle chrono",
+    "peak_abs_position": "Pic de position",
+    "capital_engaged_mad": "Capital engage",
 }
 
 VALUE_LABELS = {
@@ -187,6 +191,7 @@ MONEY_COLUMNS = {
     "effective_initial_margin_per_lot",
     "initial_margin_per_lot",
     "round_trip_fee_per_lot",
+    "capital_engaged_mad",
 }
 POINT_COLUMNS = {
     "settlement_price_points",
@@ -225,6 +230,7 @@ QUANTITY_COLUMNS = {
     "days_to_expiry",
     "direction",
     "contract_count",
+    "peak_abs_position",
 }
 RATIO_COLUMNS = {"leverage"}
 
@@ -259,7 +265,10 @@ def format_currency(value: float) -> str:
 
 
 def format_pct(value: float) -> str:
-    return f"{value:.2%}"
+    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric_value) or not np.isfinite(float(numeric_value)):
+        return "-"
+    return f"{float(numeric_value):.2%}"
 
 
 def format_number(value: float) -> str:
@@ -408,14 +417,14 @@ def _style_table_value(value: object, column: str) -> str:
 
 def _metric_card_html(label: str, value: str, glow: str = "gold", unit: str = "") -> str:
     unit_html = f'<div class="unit">{escape(unit)}</div>' if unit else ""
-    return f"""
-    <div class="glass-metric">
-        <div class="glow glow-{escape(glow)}"></div>
-        <h4>{escape(label)}</h4>
-        <div class="val">{escape(value)}</div>
-        {unit_html}
-    </div>
-    """
+    return (
+        f'<div class="glass-metric">'
+        f'<div class="glow glow-{escape(glow)}"></div>'
+        f"<h4>{escape(label)}</h4>"
+        f'<div class="val">{escape(value)}</div>'
+        f"{unit_html}"
+        f"</div>"
+    )
 
 
 def render_metric_cards(cards: list[dict], columns: int = 4) -> None:
@@ -436,6 +445,228 @@ def render_metric_cards(cards: list[dict], columns: int = 4) -> None:
                     ),
                     unsafe_allow_html=True,
                 )
+
+
+def glow_from_value(value: object, positive: str = "green", negative: str = "red", neutral: str = "blue") -> str:
+    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric_value):
+        return neutral
+    if float(numeric_value) > 0:
+        return positive
+    if float(numeric_value) < 0:
+        return negative
+    return neutral
+
+
+def _format_value_for_card(value: object, column: str) -> str:
+    if column in BOOLEAN_COLUMNS or isinstance(value, (bool, np.bool_)):
+        return _display_bool(value)
+    if pd.isna(value):
+        return "-"
+    if column in VALUE_LABELS:
+        return format_choice_value(column, value)
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return pd.Timestamp(value).strftime("%d/%m/%Y")
+
+    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.notna(numeric_value):
+        numeric_value = float(numeric_value)
+        if column in MONEY_COLUMNS:
+            return f"{numeric_value:,.2f} MAD"
+        if column in POINT_COLUMNS:
+            return f"{numeric_value:,.4f}"
+        if column in RATIO_COLUMNS:
+            return f"{numeric_value:,.2f}x" if column == "leverage" else f"{numeric_value:,.2f}"
+        if column in QUANTITY_COLUMNS:
+            return f"{numeric_value:,.2f}" if not numeric_value.is_integer() else f"{int(numeric_value):,}"
+    return str(value)
+
+
+def _detail_tone(value: object, column: str) -> str:
+    if pd.isna(value):
+        return "muted"
+
+    if column in MONEY_COLUMNS | POINT_COLUMNS | RATIO_COLUMNS:
+        numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        if pd.notna(numeric_value):
+            if float(numeric_value) > 0:
+                return "positive"
+            if float(numeric_value) < 0:
+                return "negative"
+            return "neutral"
+
+    if column in POSITIVE_FLAG_COLUMNS:
+        return "positive" if bool(value) else "neutral"
+    if column in NEGATIVE_FLAG_COLUMNS:
+        return "negative" if bool(value) else "neutral"
+
+    if column == "severity":
+        return {
+            "error": "negative",
+            "warning": "warning",
+            "info": "info",
+            "success": "positive",
+        }.get(str(value).strip().lower(), "neutral")
+
+    if column in {"side_lp", "side_label"}:
+        return {
+            "BUY": "info",
+            "SELL": "negative",
+            "LONG": "positive",
+            "SHORT": "negative",
+            "FLAT": "neutral",
+        }.get(str(value).strip().upper(), "neutral")
+
+    if column == "status":
+        tone = str(value).strip().upper()
+        if tone in {"CONFIRMED", "CONFIRME", "CONFIRMED_OK", "FILLED", "DONE", "PARTIAL", "PARTIEL"}:
+            return "positive"
+        if tone in {"PENDING", "ATTENTE"}:
+            return "warning"
+        if tone in {"REJECTED", "REJETE", "CANCELLED", "CANCELED", "ANNULE", "ANNULEE"}:
+            return "negative"
+        return "neutral"
+
+    if column == "expiry_alert":
+        return {
+            "Expired": "negative",
+            "Near expiry": "warning",
+            "OK": "positive",
+        }.get(str(value).strip(), "neutral")
+
+    if column == "mtm_source":
+        return {
+            "contract": "warning",
+            "missing": "muted",
+        }.get(str(value).strip().lower(), "neutral")
+
+    return "default"
+
+
+def _detail_badge_html(label: str, tone: str = "neutral") -> str:
+    if not label or label == "-":
+        return ""
+    return f'<span class="detail-badge detail-badge-{escape(tone)}">{escape(label)}</span>'
+
+
+def _detail_card_html(
+    title: str,
+    items: list[dict[str, str]],
+    *,
+    subtitle: str = "",
+    glow: str = "gold",
+    badge: str = "",
+    badge_tone: str = "neutral",
+) -> str:
+    subtitle_html = f'<div class="detail-card-subtitle">{escape(subtitle)}</div>' if subtitle and subtitle != "-" else ""
+    badge_html = _detail_badge_html(badge, badge_tone)
+    rows_html = "".join(
+        f'<div class="detail-card-row">'
+        f'<span class="detail-card-label">{escape(item["label"])}</span>'
+        f'<span class="detail-card-value detail-card-value-{escape(item["tone"])}">{escape(item["value"])}</span>'
+        f"</div>"
+        for item in items
+    )
+    return (
+        f'<div class="detail-card">'
+        f'<div class="glow glow-{escape(glow)}"></div>'
+        f'<div class="detail-card-head">'
+        f"<div>"
+        f'<div class="detail-card-title">{escape(title)}</div>'
+        f"{subtitle_html}"
+        f"</div>"
+        f"{badge_html}"
+        f"</div>"
+        f'<div class="detail-card-body">{rows_html}</div>'
+        f"</div>"
+    )
+
+
+def render_detail_cards(cards: list[dict], columns: int = 3) -> None:
+    if not cards:
+        return
+    columns = max(1, columns)
+    for start in range(0, len(cards), columns):
+        row_cards = cards[start : start + columns]
+        row = st.columns(len(row_cards))
+        for column, card in zip(row, row_cards):
+            with column:
+                st.markdown(
+                    _detail_card_html(
+                        title=str(card.get("title", "")),
+                        subtitle=str(card.get("subtitle", "")),
+                        items=card.get("items", []),
+                        glow=str(card.get("glow", "gold")),
+                        badge=str(card.get("badge", "")),
+                        badge_tone=str(card.get("badge_tone", "neutral")),
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+
+def render_record_cards(
+    dataframe: pd.DataFrame,
+    *,
+    title_column: str,
+    body_columns: list[str],
+    subtitle_column: str | None = None,
+    badge_column: str | None = None,
+    label_overrides: dict[str, str] | None = None,
+    columns: int = 3,
+    glow: str = "gold",
+    title_builder: Callable[[pd.Series], str] | None = None,
+    subtitle_builder: Callable[[pd.Series], str] | None = None,
+    badge_builder: Callable[[pd.Series], str] | None = None,
+    glow_builder: Callable[[pd.Series], str] | None = None,
+) -> None:
+    if dataframe.empty:
+        return
+
+    cards: list[dict] = []
+    for _, row in dataframe.iterrows():
+        title_value = (
+            title_builder(row)
+            if title_builder is not None
+            else _format_value_for_card(row.get(title_column), title_column)
+        )
+        subtitle_value = ""
+        if subtitle_builder is not None:
+            subtitle_value = subtitle_builder(row)
+        elif subtitle_column and subtitle_column in dataframe.columns:
+            subtitle_value = _format_value_for_card(row.get(subtitle_column), subtitle_column)
+
+        badge_value = ""
+        badge_tone = "neutral"
+        if badge_builder is not None:
+            badge_value = badge_builder(row)
+        elif badge_column and badge_column in dataframe.columns:
+            badge_value = _format_value_for_card(row.get(badge_column), badge_column)
+            badge_tone = _detail_tone(row.get(badge_column), badge_column)
+
+        items: list[dict[str, str]] = []
+        for column_name in body_columns:
+            if column_name not in dataframe.columns:
+                continue
+            items.append(
+                {
+                    "label": resolved_label(column_name, label_overrides),
+                    "value": _format_value_for_card(row.get(column_name), column_name),
+                    "tone": _detail_tone(row.get(column_name), column_name),
+                }
+            )
+
+        cards.append(
+            {
+                "title": title_value,
+                "subtitle": subtitle_value,
+                "badge": badge_value,
+                "badge_tone": badge_tone,
+                "glow": glow_builder(row) if glow_builder is not None else glow,
+                "items": items,
+            }
+        )
+
+    render_detail_cards(cards, columns=columns)
 
 
 def _badge_html(label: str, badge_class: str = "") -> str:
@@ -540,8 +771,8 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
             contract_count = len(app_state["contracts_raw"])
             trade_count = len(app_state["transactions_raw"])
             open_contracts = (
-                int((app_state["cmp_portfolio"]["abs_position"] > 0).sum())
-                if not app_state["cmp_portfolio"].empty
+                int((app_state["contract_metrics"]["abs_position"] > 0).sum())
+                if not app_state["contract_metrics"].empty
                 else 0
             )
             st.markdown("##### Synthese")
@@ -689,7 +920,7 @@ def load_app_state() -> dict:
         contract_issues,
         transactions_validated,
         transaction_issues,
-        cmp_portfolio,
+        contract_metrics,
     )
 
     return {

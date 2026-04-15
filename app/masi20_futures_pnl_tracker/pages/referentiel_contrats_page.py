@@ -1,7 +1,8 @@
 import pandas as pd
 import streamlit as st
 
-from futures_pnl.contracts import clear_contract_overrides, enrich_contract_reference
+from futures_pnl.config import current_valuation_date_str
+from futures_pnl.contracts import clear_contract_overrides, enrich_contract_reference, upcoming_contract_schedule
 from futures_pnl.storage import (
     load_daily_prices,
     load_transactions,
@@ -16,7 +17,6 @@ from futures_pnl.ui import (
     load_app_state,
     render_data_table,
     render_footer,
-    render_micro_note,
     render_hero,
     render_metric_cards,
     render_section_header,
@@ -31,6 +31,14 @@ render_sidebar_tools(state)
 contracts_raw = state["contracts_raw"]
 contracts_priced = state["contracts_priced"]
 contract_issues = state["contract_issues"]
+
+
+@st.cache_resource(show_spinner=False)
+def _server_reference_date() -> object:
+    reference = pd.to_datetime(current_valuation_date_str(), errors="coerce")
+    if pd.isna(reference):
+        return None
+    return pd.Timestamp(reference).date()
 
 
 def _sync_generated_tickers(previous_contracts, next_contracts) -> None:
@@ -69,7 +77,6 @@ def _sync_generated_tickers(previous_contracts, next_contracts) -> None:
 render_hero(
     "Referentiel contrats",
     "Ajoutez, modifiez et supprimez librement les contrats suivis par l'application.",
-    badges=[("Univers dynamique", ""), ("Prix", "purple"), ("Validation", "green")],
 )
 
 with_settlement = int(contracts_priced["settlement_price_points"].notna().sum()) if not contracts_priced.empty else 0
@@ -90,6 +97,8 @@ render_section_header(
     label="Contrats",
 )
 
+reference_date = _server_reference_date()
+
 editor_source = clear_contract_overrides(enrich_contract_reference(contracts_raw, force_contract_code=True))
 if editor_source.empty:
     editor_source = clear_contract_overrides(enrich_contract_reference(get_empty_contracts(), force_contract_code=True))
@@ -106,13 +115,47 @@ editor_input["comments"] = editor_input["comments"].fillna("").astype(str)
 editor_input["initial_margin_per_lot"] = pd.to_numeric(editor_input["initial_margin_per_lot"], errors="coerce")
 editor_input["settlement_price_points"] = pd.to_numeric(editor_input["settlement_price_points"], errors="coerce")
 
+upcoming_contracts = upcoming_contract_schedule(reference_date=reference_date, contract_count=5)
+upcoming_expiry_dates = [contract["expiry_date"] for contract in upcoming_contracts]
+existing_expiry_dates = [
+    value
+    for value in editor_input["expiry_date"].tolist()
+    if isinstance(value, str) and value.strip() and value not in upcoming_expiry_dates
+]
+expiry_options = [""] + upcoming_expiry_dates + sorted(set(existing_expiry_dates))
+
+if upcoming_contracts:
+    upcoming_contract_cards = []
+    palette = ["blue", "purple", "gold", "green", "red"]
+    for index, contract in enumerate(upcoming_contracts):
+        expiry_value = pd.to_datetime(contract["expiry_date"], errors="coerce")
+        expiry_label = (
+            expiry_value.strftime("%d/%m/%Y")
+            if pd.notna(expiry_value)
+            else str(contract["expiry_date"])
+        )
+        upcoming_contract_cards.append(
+            {
+                "label": expiry_label,
+                "value": contract["contract_code"],
+                "unit": f"{int(contract['days_to_expiry'])}j",
+                "glow": palette[index % len(palette)],
+            }
+        )
+    render_metric_cards(upcoming_contract_cards, columns=5)
+
 edited_contracts = st.data_editor(
     editor_input,
     num_rows="dynamic",
     width="stretch",
     hide_index=True,
     column_config={
-        "expiry_date": st.column_config.TextColumn(label_for("expiry_date"), help="Format YYYY-MM-DD"),
+        "expiry_date": st.column_config.SelectboxColumn(
+            label_for("expiry_date"),
+            help="Selectionnez une des 5 prochaines echeances trimestrielles proposees.",
+            options=expiry_options,
+            required=False,
+        ),
         "initial_margin_per_lot": st.column_config.NumberColumn(
             label_for("initial_margin_per_lot"),
             format="%.2f",
@@ -128,13 +171,6 @@ edited_contracts = st.data_editor(
 )
 
 editor_preview = clear_contract_overrides(enrich_contract_reference(edited_contracts, force_contract_code=True))
-if not editor_preview.empty:
-    render_micro_note(
-        "Apercu ticker",
-        "Le ticker est recalcule a partir de l'echeance courante. L'enregistrement applique cette valeur au registre.",
-        tone="warning",
-    )
-    render_data_table(editor_preview, ["expiry_date", "contract_code"])
 
 if st.button("Enregistrer le referentiel", width="stretch"):
     _sync_generated_tickers(contracts_raw, editor_preview)
@@ -156,7 +192,6 @@ display_columns = [
     "settlement_price_points",
     "effective_tick_value",
     "mtm_price",
-    "mtm_source",
     "days_to_expiry",
     "expiry_alert",
 ]

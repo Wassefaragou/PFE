@@ -1,4 +1,3 @@
-import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -16,137 +15,11 @@ from futures_pnl.ui import (
     render_status_box,
 )
 
-POSITIVE_COLOR = "#00d4aa"
-NEGATIVE_COLOR = "#ff6b6b"
-ACCENT_BLUE = "#4facfe"
-ACCENT_GOLD = "#f59e0b"
-ACCENT_PURPLE = "#8b5cf6"
-NEUTRAL_TEXT = "#cbd5e1"
-ZERO_LINE = "#64748b"
 
-
-def _chart_theme(chart: alt.Chart, *, height: int) -> alt.Chart:
-    return chart.properties(height=height).configure_axis(
-        gridColor="rgba(148, 163, 184, 0.12)",
-        domain=False,
-        labelColor=NEUTRAL_TEXT,
-        titleColor=NEUTRAL_TEXT,
-        titleFontSize=12,
-        titleFontWeight="normal",
-        labelFontSize=11,
-        tickColor="rgba(148, 163, 184, 0.25)",
-    ).configure_view(strokeOpacity=0).configure_legend(
-        labelColor=NEUTRAL_TEXT,
-        titleColor=NEUTRAL_TEXT,
-        labelFontSize=11,
-        titleFontSize=12,
-        orient="top",
-        direction="horizontal",
-        strokeColor="transparent",
-    )
-
-
-def _portfolio_with_cmp(contract_metrics: pd.DataFrame, cmp_portfolio: pd.DataFrame) -> pd.DataFrame:
+def _official_portfolio_view(contract_metrics: pd.DataFrame) -> pd.DataFrame:
     if contract_metrics.empty:
         return contract_metrics
-    cmp_view = (
-        cmp_portfolio[["contract_code", "cmp_final_cost"]].rename(columns={"cmp_final_cost": "cmp_value"}).copy()
-        if not cmp_portfolio.empty
-        else pd.DataFrame(columns=["contract_code", "cmp_value"])
-    )
-    return pd.merge(contract_metrics.copy(), cmp_view, on="contract_code", how="left")
-
-
-def _dashboard_pnl_chart(dataframe: pd.DataFrame) -> alt.Chart:
-    chart_data = dataframe[["contract_code", "pnl_management_mad", "pnl_unrealized_mad", "pnl_realized_mad"]].copy()
-    chart_data = chart_data.sort_values("pnl_management_mad", ascending=True).reset_index(drop=True)
-    order = chart_data["contract_code"].tolist()
-    chart_data = chart_data.melt(
-        id_vars="contract_code",
-        value_vars=["pnl_management_mad", "pnl_unrealized_mad", "pnl_realized_mad"],
-        var_name="component",
-        value_name="amount",
-    )
-    labels_map = {
-        "pnl_management_mad": "P&L net",
-        "pnl_unrealized_mad": "P&L latent",
-        "pnl_realized_mad": "P&L realise",
-    }
-    chart_data["component_label"] = chart_data["component"].map(labels_map)
-
-    zero_rule = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(
-        color=ZERO_LINE, strokeDash=[6, 4]
-    ).encode(x="x:Q")
-
-    base = alt.Chart(chart_data)
-    bars = base.mark_bar(cornerRadiusEnd=5, size=10).encode(
-        y=alt.Y("contract_code:N", title=None, sort=order, axis=alt.Axis(labelFontSize=11, labelLimit=200)),
-        yOffset=alt.YOffset("component_label:N"),
-        x=alt.X("amount:Q", title="Montant (MAD)", axis=alt.Axis(format="~s")),
-        color=alt.Color(
-            "component_label:N",
-            title="Composante",
-            scale=alt.Scale(
-                domain=["P&L net", "P&L latent", "P&L realise"],
-                range=[ACCENT_GOLD, ACCENT_BLUE, POSITIVE_COLOR],
-            ),
-        ),
-        tooltip=[
-            alt.Tooltip("contract_code:N", title="Contrat"),
-            alt.Tooltip("component_label:N", title="Composante"),
-            alt.Tooltip("amount:Q", title="Montant (MAD)", format=",.2f"),
-        ],
-    )
-    labels = base.mark_text(align="left", dx=4, fontSize=10, color=NEUTRAL_TEXT).encode(
-        y=alt.Y("contract_code:N", sort=order),
-        yOffset=alt.YOffset("component_label:N"),
-        x=alt.X("amount:Q"),
-        text=alt.Text("amount:Q", format=",.0f"),
-    )
-    dynamic_height = max(280, dataframe["contract_code"].nunique() * 100)
-    return _chart_theme(zero_rule + bars + labels, height=dynamic_height)
-
-
-def _dashboard_capital_chart(dataframe: pd.DataFrame) -> alt.Chart:
-    chart_data = dataframe[["contract_code", "margin_mad", "notional_mad"]].copy()
-    chart_data = chart_data.sort_values("notional_mad", ascending=True).reset_index(drop=True)
-    order = chart_data["contract_code"].tolist()
-    chart_data = chart_data.melt(
-        id_vars="contract_code",
-        value_vars=["margin_mad", "notional_mad"],
-        var_name="metric",
-        value_name="amount",
-    )
-    labels_map = {"margin_mad": "Marge mobilisee", "notional_mad": "Exposition brute"}
-    chart_data["metric_label"] = chart_data["metric"].map(labels_map)
-
-    base = alt.Chart(chart_data)
-    bars = base.mark_bar(cornerRadiusEnd=5, size=14).encode(
-        y=alt.Y("contract_code:N", title=None, sort=order, axis=alt.Axis(labelFontSize=11, labelLimit=200)),
-        yOffset=alt.YOffset("metric_label:N"),
-        x=alt.X("amount:Q", title="Montant (MAD)", axis=alt.Axis(format="~s")),
-        color=alt.Color(
-            "metric_label:N",
-            title="Mesure",
-            scale=alt.Scale(
-                domain=["Marge mobilisee", "Exposition brute"],
-                range=[ACCENT_PURPLE, ACCENT_BLUE],
-            ),
-        ),
-        tooltip=[
-            alt.Tooltip("contract_code:N", title="Contrat"),
-            alt.Tooltip("metric_label:N", title="Mesure"),
-            alt.Tooltip("amount:Q", title="Montant (MAD)", format=",.2f"),
-        ],
-    )
-    labels = base.mark_text(align="left", dx=4, fontSize=10, color=NEUTRAL_TEXT).encode(
-        y=alt.Y("contract_code:N", sort=order),
-        yOffset=alt.YOffset("metric_label:N"),
-        x=alt.X("amount:Q"),
-        text=alt.Text("amount:Q", format=",.0f"),
-    )
-    dynamic_height = max(250, dataframe["contract_code"].nunique() * 80)
-    return _chart_theme(bars + labels, height=dynamic_height)
+    return contract_metrics.copy()
 
 
 init_page("Dashboard")
@@ -155,10 +28,9 @@ render_sidebar_tools(state)
 
 global_metrics = state["global_metrics"]
 contract_metrics = state["contract_metrics"]
-cmp_portfolio = state["cmp_portfolio"]
 alerts = state["alerts"]
 
-portfolio_view = _portfolio_with_cmp(contract_metrics, cmp_portfolio)
+portfolio_view = _official_portfolio_view(contract_metrics)
 open_cmp_view = (
     portfolio_view.loc[portfolio_view["abs_position"] > 0].copy()
     if not portfolio_view.empty and "abs_position" in portfolio_view.columns
@@ -167,14 +39,13 @@ open_cmp_view = (
 
 render_hero(
     "Index Futures P&L Tracker",
-    "Vue d'ensemble du portefeuille avec calcul P&L et lecture du vrai CMP par contrat.",
-    badges=[("P&L officiel", ""), ("CMP", "purple"), ("MtM", "blue")],
+    "Vue d'ensemble du portefeuille avec calcul P&L WAP. La page CMP sequentiel presente l'autre methode de calcul.",
 )
 
 render_metric_cards(
     [
-        {"label": "P&L net", "value": format_currency(global_metrics["total_management_pnl"]), "glow": "gold"},
-        {"label": "P&L WAP", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
+        {"label": "P&L economique", "value": format_currency(global_metrics["total_management_pnl"]), "glow": "gold"},
+        {"label": "P&L comptable", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
         {"label": "P&L latent", "value": format_currency(global_metrics["total_unrealized_pnl"]), "glow": "blue"},
         {"label": "P&L realise", "value": format_currency(global_metrics["total_realized_pnl"]), "glow": "green"},
         {"label": "Exposition brute", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
@@ -182,7 +53,7 @@ render_metric_cards(
         {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
         {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "Commissions", "value": format_currency(global_metrics["total_commissions"]), "glow": "red"},
-        {"label": "ROI marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
+        {"label": "ROI sur marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
     ],
     columns=5,
 )
@@ -214,7 +85,7 @@ with col_health:
 
 render_section_header(
     "Portefeuille par contrat",
-    "Vue P&L par contrat avec CMP, MtM, marge et alertes de limite.",
+    "Vue P&L par contrat en methode WAP avec CMP WAP, MtM, marge et alertes de limites.",
     step="02",
     label="Portfolio",
 )
@@ -226,12 +97,13 @@ if portfolio_view.empty:
     )
 else:
     render_data_table(
-        portfolio_view,
+        portfolio_view.sort_values(["pnl_management_mad", "contract_code"], ascending=[False, True]),
         [
             "contract_code",
+            "underlying_name",
             "side_label",
             "abs_position",
-            "cmp_value",
+            "entry_wap",
             "mtm_price",
             "pnl_unrealized_mad",
             "pnl_realized_mad",
@@ -242,24 +114,15 @@ else:
             "expiry_alert",
         ],
         label_overrides={
-            "cmp_value": "CMP",
             "signed_notional_mad": "Exposition nette",
         },
     )
 
-    chart_col_left, chart_col_right = st.columns(2)
-    with chart_col_left:
-        st.subheader("P&L par contrat")
-        st.altair_chart(_dashboard_pnl_chart(contract_metrics), width="stretch")
-    with chart_col_right:
-        st.subheader("Capital engage")
-        st.altair_chart(_dashboard_capital_chart(contract_metrics), width="stretch")
-
 render_section_header(
-    "CMP par contrat",
-    "Lecture rapide du vrai CMP par contrat ouvert.",
+    "CMP WAP par contrat",
+    "Lecture rapide du CMP WAP sur les positions ouvertes. La methode sequentielle reste sur sa page dediee.",
     step="03",
-    label="CMP",
+    label="WAP",
 )
 
 if open_cmp_view.empty:
@@ -269,16 +132,17 @@ else:
         open_cmp_view.sort_values(["abs_position", "contract_code"], ascending=[False, True]),
         [
             "contract_code",
+            "underlying_name",
             "side_label",
             "abs_position",
-            "cmp_value",
+            "entry_wap",
             "mtm_price",
             "delta_points",
+            "expiry_alert",
         ],
         label_overrides={
-            "cmp_value": "CMP",
             "abs_position": "Position",
-            "delta_points": "Ecart MtM/CMP",
+            "delta_points": "Ecart MtM/CMP WAP",
         },
     )
 
@@ -292,6 +156,14 @@ if state["confirmed_positions"].empty:
     render_status_box("Aucune vue confirmee disponible.", kind="info")
 else:
     render_status_box("Informatif uniquement. Cette vue ne remplace pas le P&L officiel.", kind="warning")
-    render_data_table(state["confirmed_positions"])
+    render_data_table(
+        state["confirmed_positions"].sort_values(["delta_vs_all", "contract_code"], ascending=[False, True]),
+        [
+            "contract_code",
+            "official_net_position",
+            "confirmed_net_position",
+            "delta_vs_all",
+        ],
+    )
 
 render_footer()

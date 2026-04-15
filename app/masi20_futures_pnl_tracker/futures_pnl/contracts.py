@@ -1,8 +1,9 @@
 import re
+from calendar import monthrange
 
 import pandas as pd
 
-from .config import FIXED_UNDERLYING_NAME
+from .config import FIXED_UNDERLYING_NAME, current_valuation_date_str
 
 MONTH_CODES = {
     1: "JAN",
@@ -65,6 +66,56 @@ def normalize_contract_code(value: object) -> object:
 
 def _ticker_from_timestamp(expiry_date: pd.Timestamp) -> str:
     return f"F{FIXED_UNDERLYING_NAME}{MONTH_CODES[int(expiry_date.month)]}{expiry_date.strftime('%y')}"
+
+
+def _last_friday_of_month(year: int, month: int) -> pd.Timestamp:
+    last_day = monthrange(year, month)[1]
+    candidate = pd.Timestamp(year=year, month=month, day=last_day)
+    while candidate.weekday() != 4:
+        candidate -= pd.Timedelta(days=1)
+    return candidate.normalize()
+
+
+def upcoming_contract_schedule(
+    reference_date: pd.Timestamp | str | None = None,
+    *,
+    contract_count: int = 5,
+) -> list[dict]:
+    if contract_count <= 0:
+        return []
+
+    reference = pd.to_datetime(
+        current_valuation_date_str() if reference_date is None else reference_date,
+        errors="coerce",
+    )
+    if pd.isna(reference):
+        return []
+    reference = pd.Timestamp(reference).normalize()
+
+    schedule: list[dict] = []
+    current_year = int(reference.year)
+    maturity_months = [3, 6, 9, 12]
+
+    while len(schedule) < contract_count:
+        for month in maturity_months:
+            expiry_date = _last_friday_of_month(current_year, month)
+            days_to_expiry = int((expiry_date - reference).days)
+            if days_to_expiry <= 0:
+                continue
+
+            contract_code = normalize_contract_code(_ticker_from_timestamp(expiry_date))
+            schedule.append(
+                {
+                    "expiry_date": expiry_date.strftime("%Y-%m-%d"),
+                    "contract_code": contract_code,
+                    "days_to_expiry": days_to_expiry,
+                }
+            )
+            if len(schedule) >= contract_count:
+                break
+        current_year += 1
+
+    return schedule
 
 
 def enrich_contract_reference(

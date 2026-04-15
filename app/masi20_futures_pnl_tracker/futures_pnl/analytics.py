@@ -13,6 +13,25 @@ def _safe_weighted_average(dataframe: pd.DataFrame) -> float:
     return float((dataframe["quantity_lots"] * dataframe["price_points"]).sum() / denominator)
 
 
+def _peak_abs_position_from_trades(dataframe: pd.DataFrame) -> float:
+    if dataframe.empty:
+        return 0.0
+
+    ordered = dataframe.copy()
+    if "chrono_key" in ordered.columns:
+        ordered = ordered.sort_values("chrono_key")
+
+    signed_qty = np.where(ordered["side_lp"].eq("BUY"), ordered["quantity_lots"], -ordered["quantity_lots"])
+    cumulative_position = pd.Series(signed_qty, dtype="float64").fillna(0.0).cumsum()
+    if cumulative_position.empty:
+        return 0.0
+    return float(cumulative_position.abs().max())
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    return float(numerator / denominator) if denominator else np.nan
+
+
 def _side_label_from_position(position: float) -> str:
     if position > 0:
         return "LONG"
@@ -47,6 +66,8 @@ def compute_contract_metrics(
                 "notional_mad",
                 "signed_notional_mad",
                 "margin_mad",
+                "peak_abs_position",
+                "capital_engaged_mad",
                 "leverage",
             ]
         )
@@ -92,6 +113,8 @@ def compute_contract_metrics(
         notional_mad = float(entry_wap * tick_value * abs_position) if abs_position > 0 else 0.0
         signed_notional_mad = float(entry_wap * tick_value * net_position) if net_position != 0 else 0.0
         margin_mad = float(abs_position * contract.effective_initial_margin_per_lot)
+        peak_abs_position = _peak_abs_position_from_trades(contract_trades)
+        capital_engaged_mad = float(peak_abs_position * contract.effective_initial_margin_per_lot)
         leverage = float(notional_mad / margin_mad) if margin_mad else 0.0
 
         metrics.append(
@@ -130,6 +153,8 @@ def compute_contract_metrics(
                 "notional_mad": notional_mad,
                 "signed_notional_mad": signed_notional_mad,
                 "margin_mad": margin_mad,
+                "peak_abs_position": peak_abs_position,
+                "capital_engaged_mad": capital_engaged_mad,
                 "leverage": leverage,
                 "position_limit_breach": bool(
                     pd.notna(contract.effective_position_limit_per_contract)
@@ -156,15 +181,17 @@ def compute_global_metrics(contract_metrics_df: pd.DataFrame) -> dict:
         "total_margin": float(contract_metrics_df.get("margin_mad", pd.Series(dtype=float)).sum()),
     }
     total_margin = totals["total_margin"]
-    capital_total_engaged = total_margin
+    capital_total_engaged = float(
+        contract_metrics_df.get("capital_engaged_mad", pd.Series(dtype=float)).sum()
+    )
+    if not capital_total_engaged:
+        capital_total_engaged = total_margin
     totals.update(
         {
             "global_leverage": float(totals["total_notional"] / total_margin) if total_margin else 0.0,
-            "roi_on_margin": float(totals["total_management_pnl"] / total_margin) if total_margin else 0.0,
+            "roi_on_margin": _safe_ratio(totals["total_management_pnl"], total_margin),
             "capital_total_engaged": capital_total_engaged,
-            "roi_on_capital_engaged": float(totals["total_management_pnl"] / capital_total_engaged)
-            if capital_total_engaged
-            else 0.0,
+            "roi_on_capital_engaged": _safe_ratio(totals["total_management_pnl"], capital_total_engaged),
         }
     )
     return totals
@@ -291,7 +318,7 @@ def compute_cmp_global_metrics(cmp_portfolio_df: pd.DataFrame) -> dict:
     totals.update(
         {
             "global_leverage": float(totals["total_notional"] / total_margin) if total_margin else 0.0,
-            "roi_on_margin": float(totals["total_cmp_pnl"] / total_margin) if total_margin else 0.0,
+            "roi_on_margin": _safe_ratio(totals["total_cmp_pnl"], total_margin),
         }
     )
     return totals

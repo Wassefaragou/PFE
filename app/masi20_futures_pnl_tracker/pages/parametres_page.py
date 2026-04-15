@@ -44,7 +44,6 @@ default_position_limit_value = _optional_number(settings.get("default_position_l
 render_hero(
     "Parametres globaux",
     "Parametres globaux de tick, de frais et de limites. Le MtM se renseigne desormais contrat par contrat dans le referentiel.",
-    badges=[("Frais", ""), ("Tick", "purple"), ("Limites", "green")],
 )
 
 render_metric_cards(
@@ -92,7 +91,7 @@ with st.form("settings_form"):
         placeholder="Ex: 10.00",
     )
 
-    render_form_group("Bloc frais", "Frais aller-retour utilises dans le P&L economique.")
+    render_form_group("Bloc frais", "Frais aller-retour utilisés dans le P&L économique.")
     col1, col2, col3 = st.columns(3)
     commission_bvc_rt = col1.number_input(
         "Commission BVC AR",

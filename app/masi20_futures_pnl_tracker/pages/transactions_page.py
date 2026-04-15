@@ -46,7 +46,6 @@ def _transaction_option_label(row: pd.Series) -> str:
 render_hero(
     "Transactions",
     "Saisie, import et edition du registre qui alimente directement le moteur officiel.",
-    badges=[("Saisie manuelle", ""), ("CSV", "purple"), ("Moteur officiel", "green")],
 )
 
 confirmed_count = int(transactions_validated["is_confirmed"].fillna(False).sum()) if not transactions_validated.empty else 0
@@ -76,12 +75,12 @@ official_notional = (
 render_metric_cards(
     [
         {"label": "Transactions", "value": str(len(transactions_raw)), "glow": "gold"},
-        {"label": "Confirmees", "value": str(confirmed_count), "glow": "green"},
+        {"label": "Confirmées", "value": str(confirmed_count), "glow": "green"},
         {"label": "En attente", "value": str(pending_count), "glow": "gold"},
-        {"label": "Rejetees", "value": str(rejected_count), "glow": "red"},
+        {"label": "Rejetées", "value": str(rejected_count), "glow": "red"},
         {"label": "Exclues du P&L", "value": str(excluded_count), "glow": "purple"},
         {"label": "Lignes invalides", "value": str(invalid_count), "glow": "red"},
-        {"label": "Notionnel confirme", "value": format_currency(official_notional), "glow": "blue"},
+        {"label": "Notionnel confirmé", "value": format_currency(official_notional), "glow": "blue"},
     ],
     columns=6,
 )
@@ -187,9 +186,9 @@ with tab_import:
             )
             render_metric_cards(
                 [
-                    {"label": "Format detecte", "value": detected_format, "glow": "purple"},
-                    {"label": "Lignes importees", "value": str(len(imported)), "glow": "gold"},
-                    {"label": "Lignes a verifier", "value": str(missing_required), "glow": "red"},
+                    {"label": "Format détecté", "value": detected_format, "glow": "purple"},
+                    {"label": "Lignes importées", "value": str(len(imported)), "glow": "gold"},
+                    {"label": "Lignes à vérifier", "value": str(missing_required), "glow": "red"},
                 ],
                 columns=3,
             )

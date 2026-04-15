@@ -1,1 +1,2 @@
 contract_code,underlying_name,expiry_date,tick_value,initial_margin_per_lot,settlement_price_points,position_limit_per_contract,comments
+FMASI20JUI26,MASI20,2026-06-26,,1500.0,1400.0,,Bien

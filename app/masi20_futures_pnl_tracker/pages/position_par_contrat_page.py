@@ -22,8 +22,7 @@ confirmed_positions = state["confirmed_positions"]
 
 render_hero(
     "Position par contrat",
-    "Vue officielle du portefeuille par contrat avec une lecture informative des seuls trades confirmes.",
-    badges=[("Position officielle", ""), ("Vue confirmee", "purple"), ("Limites", "green")],
+    "Vue officielle du portefeuille par contrat en methode WAP, avec une lecture informative des seuls trades confirmes.",
 )
 
 long_count = int((contract_metrics["net_position"] > 0).sum()) if not contract_metrics.empty else 0
@@ -36,15 +35,15 @@ render_metric_cards(
         {"label": "Contrats ouverts", "value": str(int((contract_metrics['abs_position'] > 0).sum())) if not contract_metrics.empty else "0", "glow": "gold"},
         {"label": "Contrats longs", "value": str(long_count), "glow": "green"},
         {"label": "Contrats shorts", "value": str(short_count), "glow": "purple"},
-        {"label": "P&L economique", "value": format_currency(mgmt_pnl), "glow": "blue"},
-        {"label": "Limites depassees", "value": str(breach_count), "glow": "red"},
+        {"label": "P&L économique", "value": format_currency(mgmt_pnl), "glow": "blue"},
+        {"label": "Limites dépassées", "value": str(breach_count), "glow": "red"},
     ],
     columns=5,
 )
 
 render_section_header(
     "Moteur officiel",
-    "Calcul officiel par contrat base sur l'agregation WAP des achats et des ventes et le MtM retenu.",
+    "Calcul officiel par contrat base sur l'agregation WAP des achats et des ventes. La page CMP sequentiel presente l'autre methode.",
     step="01",
     label="Official",
 )
@@ -52,31 +51,29 @@ render_section_header(
 if contract_metrics.empty:
     render_status_box("Aucune metrique contrat a afficher.", kind="info")
 else:
-    display_columns = [
-        "contract_code",
-        "underlying_name",
-        "total_buys_lots",
-        "total_sells_lots",
-        "net_position",
-        "side_label",
-        "entry_wap",
-        "mtm_price",
-        "mtm_source",
-        "delta_points",
-        "pnl_unrealized_mad",
-        "matched_qty",
-        "pnl_realized_mad",
-        "pnl_accounting_mad",
-        "commissions_mad",
-        "pnl_management_mad",
-        "notional_mad",
-        "margin_mad",
-        "leverage",
-        "expiry_alert",
-    ]
     render_data_table(
-        contract_metrics,
-        display_columns,
+        contract_metrics.sort_values(["pnl_management_mad", "contract_code"], ascending=[False, True]),
+        [
+            "contract_code",
+            "underlying_name",
+            "total_buys_lots",
+            "total_sells_lots",
+            "net_position",
+            "side_label",
+            "entry_wap",
+            "mtm_price",
+            "delta_points",
+            "pnl_unrealized_mad",
+            "pnl_realized_mad",
+            "pnl_accounting_mad",
+            "commissions_mad",
+            "pnl_management_mad",
+            "notional_mad",
+            "margin_mad",
+            "leverage",
+            "position_limit_breach",
+            "expiry_alert",
+        ],
         label_overrides={
             "notional_mad": "Exposition ouverte (abs.)",
         },
@@ -92,6 +89,14 @@ if confirmed_positions.empty:
     render_status_box("Aucune vue confirmee disponible.", kind="info")
 else:
     render_status_box("Informatif uniquement. Cette vue ne remplace pas le P&L officiel.", kind="warning")
-    render_data_table(confirmed_positions)
+    render_data_table(
+        confirmed_positions.sort_values(["delta_vs_all", "contract_code"], ascending=[False, True]),
+        [
+            "contract_code",
+            "official_net_position",
+            "confirmed_net_position",
+            "delta_vs_all",
+        ],
+    )
 
 render_footer()
