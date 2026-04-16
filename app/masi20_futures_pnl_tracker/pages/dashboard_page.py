@@ -39,7 +39,7 @@ open_cmp_view = (
 
 render_hero(
     "Index Futures P&L Tracker",
-    "Vue d'ensemble du portefeuille avec calcul P&L WAP. La page CMP sequentiel presente l'autre methode de calcul.",
+    "Vue d'ensemble du portefeuille avec le calcul P&L principal du tracker. La page CMP sequentiel presente l'autre methode.",
 )
 
 render_metric_cards(
@@ -85,7 +85,7 @@ with col_health:
 
 render_section_header(
     "Portefeuille par contrat",
-    "Vue P&L par contrat en methode WAP avec CMP WAP, MtM, marge et alertes de limites.",
+    "Vue P&L par contrat avec CMP WAP, cours retenu, marge et alertes de limites.",
     step="02",
     label="Portfolio",
 )
@@ -142,7 +142,7 @@ else:
         ],
         label_overrides={
             "abs_position": "Position",
-            "delta_points": "Ecart MtM/CMP WAP",
+            "delta_points": "Ecart cours/CMP WAP",
         },
     )
 

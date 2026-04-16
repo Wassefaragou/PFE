@@ -76,7 +76,7 @@ def _sync_generated_tickers(previous_contracts, next_contracts) -> None:
 
 render_hero(
     "Referentiel contrats",
-    "Ajoutez, modifiez et supprimez librement les contrats suivis par l'application.",
+    "Ajoutez, modifiez et supprimez les contrats suivis par le tracker.",
 )
 
 with_settlement = int(contracts_priced["settlement_price_points"].notna().sum()) if not contracts_priced.empty else 0
@@ -85,7 +85,7 @@ invalid_count = int(contracts_priced["is_valid"].eq(False).sum()) if not contrac
 render_metric_cards(
     [
         {"label": "Contrats", "value": str(len(contracts_raw)), "glow": "gold"},
-        {"label": "Avec MtM", "value": str(with_settlement), "glow": "blue"},
+        {"label": "Avec cours", "value": str(with_settlement), "glow": "blue"},
         {"label": "Lignes invalides", "value": str(invalid_count), "glow": "red"},
     ],
     columns=3,
@@ -164,7 +164,7 @@ edited_contracts = st.data_editor(
         "settlement_price_points": st.column_config.NumberColumn(
             label_for("settlement_price_points"),
             format="%.4f",
-            help="MtM du contrat pour la valorisation du jour.",
+            help="Cours de valorisation utilise pour le suivi quotidien.",
         ),
         "comments": st.column_config.TextColumn(label_for("comments")),
     },
@@ -178,8 +178,8 @@ if st.button("Enregistrer le referentiel", width="stretch"):
     st.rerun()
 
 render_section_header(
-    "Controle et pricing",
-    "Validation des lignes et apercu du MtM saisi par contrat et du MtM retenu par le moteur.",
+    "Controle du referentiel",
+    "Validation des lignes et apercu du cours retenu par contrat.",
     step="02",
     label="Controles",
 )
@@ -191,7 +191,6 @@ display_columns = [
     "initial_margin_per_lot",
     "settlement_price_points",
     "effective_tick_value",
-    "mtm_price",
     "days_to_expiry",
     "expiry_alert",
 ]

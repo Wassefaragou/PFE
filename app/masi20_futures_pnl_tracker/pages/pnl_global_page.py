@@ -31,7 +31,7 @@ contract_metrics = state["contract_metrics"]
 portfolio_view = _official_portfolio_view(contract_metrics)
 active_contracts = int((contract_metrics["abs_position"] > 0).sum()) if not contract_metrics.empty else 0
 profitable_contracts = int((contract_metrics["pnl_management_mad"] > 0).sum()) if not contract_metrics.empty else 0
-contracts_with_mtm = int((contract_metrics["mtm_source"] == "contract").sum()) if not contract_metrics.empty else 0
+contracts_with_mtm = int(contract_metrics["mtm_price"].notna().sum()) if not contract_metrics.empty else 0
 
 render_hero(
     "PnL global",
@@ -52,14 +52,14 @@ render_metric_cards(
         {"label": "ROI sur marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
         {"label": "Contrats ouverts", "value": str(active_contracts), "glow": "purple"},
         {"label": "Contrats en gain", "value": str(profitable_contracts), "glow": "green"},
-        {"label": "Contrats avec MtM", "value": str(contracts_with_mtm), "glow": "blue"},
+        {"label": "Contrats avec cours", "value": str(contracts_with_mtm), "glow": "blue"},
     ],
     columns=5,
 )
 
 render_section_header(
     "Synthese globale",
-    "Lecture en tables du P&L, du capital engage par contrat et de la couverture MtM.",
+    "Lecture en tables du P&L, du capital engage par contrat et de la disponibilite des cours.",
     step="01",
     label="Global",
 )
@@ -94,7 +94,7 @@ else:
         columns=3,
     )
 
-    portfolio_tab, capital_tab, mtm_tab = st.tabs(["Portefeuille", "Capital", "Couverture MtM"])
+    portfolio_tab, capital_tab, mtm_tab = st.tabs(["Portefeuille", "Capital", "Disponibilite cours"])
 
     with portfolio_tab:
         render_data_table(
@@ -143,7 +143,7 @@ else:
     with mtm_tab:
         mtm_summary = ordered_metrics.copy()
         mtm_summary["mtm_coverage"] = mtm_summary["mtm_price"].notna().map(
-            {True: "MtM renseigne", False: "MtM manquant"}
+            {True: "Cours renseigne", False: "Cours manquant"}
         )
         mtm_summary = (
             mtm_summary.groupby("mtm_coverage", as_index=False)
@@ -167,7 +167,7 @@ else:
                 "pnl_management_mad",
             ],
             label_overrides={
-                "mtm_coverage": "Couverture MtM",
+                "mtm_coverage": "Disponibilite cours",
             },
         )
 

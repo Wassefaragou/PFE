@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import os
 import re
 import unicodedata
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
@@ -33,6 +36,9 @@ APP_TITLE = "MASI20 Futures Pricer"
 
 NAVIGATION_STATE_KEY = 'selected_app'
 DISPLAY_YEAR_DAY_COUNT = 360.0
+SPOT_SOURCE_MANUAL = "Manuel"
+SPOT_SOURCE_AUTO = "Automatique"
+MASI20_SPOT_API_URL = "https://api.casablanca-bourse.com/fr/api/bourse/dashboard/index_cotation/512343"
 
 
 def run():
@@ -174,6 +180,44 @@ def run():
         if parsed_value < 0:
             return float("nan"), "Le spot ne peut pas etre negatif."
         return parsed_value, None
+
+
+    def fetch_masi20_spot(timeout: float = 10.0) -> tuple[float, str]:
+        request = Request(
+            MASI20_SPOT_API_URL,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "MASI20-Futures-Pricer/1.0",
+            },
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                payload = json.load(response)
+        except HTTPError as exc:
+            raise RuntimeError(f"Erreur API Casablanca Bourse ({exc.code}).") from exc
+        except URLError as exc:
+            raise RuntimeError("Connexion a l'API Casablanca Bourse impossible.") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Reponse API invalide pour le spot MASI20.") from exc
+
+        raw_spot = (payload.get("data") or {}).get("field_index_value")
+        try:
+            spot_value = float(raw_spot)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Le spot MASI20 est absent de la reponse API.") from exc
+
+        if spot_value <= 0:
+            raise RuntimeError("Le spot MASI20 retourne par l'API est invalide.")
+
+        fetched_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        return spot_value, fetched_at
+
+
+    def format_fetch_timestamp(value: object) -> str:
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.isna(parsed):
+            return "-"
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
 
     def clean_title(value: object) -> str:
@@ -475,6 +519,15 @@ def run():
         default_eval_date = datetime.now().date()
         default_contracts = build_upcoming_contracts(default_eval_date, 1)
 
+        if "pricer_spot_mode" not in st.session_state:
+            st.session_state["pricer_spot_mode"] = SPOT_SOURCE_MANUAL
+        if "pricer_spot_manual_input" not in st.session_state:
+            st.session_state["pricer_spot_manual_input"] = ""
+        if "pricer_spot_auto_value" not in st.session_state:
+            st.session_state["pricer_spot_auto_value"] = None
+        if "pricer_spot_auto_fetched_at" not in st.session_state:
+            st.session_state["pricer_spot_auto_fetched_at"] = None
+
         st.markdown(
             f"""
             <div class="sidebar-logo" style="display: flex; align-items: center; margin-bottom: 20px;">
@@ -487,15 +540,55 @@ def run():
         st.markdown("---")
         st.markdown("##### Parametres")
 
-        spot_input = st.text_input(
-            "Spot MASI20 (S)",
-            value="",
-            placeholder="Ex: 1423.18",
-            help="Laissez vide au premier lancement si le spot n'est pas encore disponible.",
+        spot_mode = st.radio(
+            "Source du spot MASI20",
+            options=[SPOT_SOURCE_MANUAL, SPOT_SOURCE_AUTO],
+            key="pricer_spot_mode",
+            horizontal=True,
         )
-        spot_price, spot_error = parse_optional_localized_float(spot_input)
-        if spot_error:
-            st.error(spot_error)
+
+        if spot_mode == SPOT_SOURCE_MANUAL:
+            spot_input = st.text_input(
+                "Spot MASI20 (S)",
+                key="pricer_spot_manual_input",
+                placeholder="Ex: 1423.18",
+                help="Saisissez manuellement le spot MASI20.",
+            )
+            spot_price, spot_error = parse_optional_localized_float(spot_input)
+            if spot_error:
+                st.error(spot_error)
+            spot_source_caption = "Saisi manuellement dans la barre laterale"
+        else:
+            st.caption(f"API : {MASI20_SPOT_API_URL}")
+            if st.button("Fetch spot MASI20", key="fetch_spot_api", width="stretch"):
+                try:
+                    auto_spot_value, auto_spot_fetched_at = fetch_masi20_spot()
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state["pricer_spot_auto_value"] = auto_spot_value
+                    st.session_state["pricer_spot_auto_fetched_at"] = auto_spot_fetched_at
+                    st.rerun()
+
+            auto_spot_value = st.session_state.get("pricer_spot_auto_value")
+            auto_spot_fetched_at = st.session_state.get("pricer_spot_auto_fetched_at")
+            st.text_input(
+                "Dernier spot auto",
+                value="-" if auto_spot_value is None else f"{float(auto_spot_value):.4f}",
+                disabled=True,
+            )
+            st.text_input(
+                "Dernier fetch",
+                value=format_fetch_timestamp(auto_spot_fetched_at),
+                disabled=True,
+            )
+            spot_price = float(auto_spot_value) if auto_spot_value is not None else float("nan")
+            spot_error = None
+            spot_source_caption = (
+                "Recupere automatiquement via l'API Casablanca Bourse"
+                if auto_spot_value is not None
+                else "Cliquez sur le bouton de fetch pour recuperer le spot"
+            )
 
         st.markdown("---")
 
@@ -1093,7 +1186,7 @@ def run():
 
     with col_p1:
         st.metric("Spot", "-" if not spot_ready else f"{spot_price:.2f}")
-        st.caption("Saisi dans la barre laterale")
+        st.caption(spot_source_caption)
 
     with col_p2:
         d_override = st.number_input(
@@ -1114,12 +1207,17 @@ def run():
         )
 
     if not spot_ready:
+        missing_spot_message = (
+            "Renseignez le spot dans la barre laterale pour lancer la valorisation."
+            if spot_mode == SPOT_SOURCE_MANUAL
+            else "Cliquez sur le bouton de fetch dans la barre laterale pour recuperer le spot."
+        )
         st.markdown(
-            """
+            f"""
             <div style="text-align: center; padding: 2rem 1rem; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px;">
                 <h4 style="color: #94a3b8; margin: 0;">Spot MASI20 manquant</h4>
                 <p style="color: #64748b; margin-top: 0.6rem; font-size: 0.92rem;">
-                    Renseignez le spot dans la barre laterale pour lancer la valorisation.
+                    {missing_spot_message}
                 </p>
             </div>
             """,

@@ -22,7 +22,7 @@ confirmed_positions = state["confirmed_positions"]
 
 render_hero(
     "Position par contrat",
-    "Vue officielle du portefeuille par contrat en methode WAP, avec une lecture informative des seuls trades confirmes.",
+    "Vue officielle du portefeuille par contrat, avec une lecture informative des seuls trades confirmes.",
 )
 
 long_count = int((contract_metrics["net_position"] > 0).sum()) if not contract_metrics.empty else 0

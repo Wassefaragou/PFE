@@ -1,6 +1,7 @@
 import math
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -10,7 +11,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from futures_pnl.analytics import compute_cmp_sequential, compute_contract_metrics, compute_global_metrics
+from futures_pnl.analytics import (
+    build_cmp_portfolio_view,
+    compute_cmp_sequential,
+    compute_contract_metrics,
+    compute_global_metrics,
+)
 from futures_pnl.pricing import compute_theoretical_prices
 from futures_pnl.validators import validate_contracts, validate_transactions
 
@@ -147,6 +153,24 @@ class AnalyticsTests(unittest.TestCase):
         self.assertAlmostEqual(global_metrics["capital_total_engaged"], 1000.0)
         self.assertTrue(math.isnan(global_metrics["roi_on_margin"]))
         self.assertAlmostEqual(global_metrics["roi_on_capital_engaged"], 0.1)
+
+    def test_cmp_portfolio_defaults_missing_tolerance_to_true_without_future_warning(self) -> None:
+        contracts_priced, transactions_validated = _validated_inputs(
+            110,
+            [
+                ("T1", "2026-04-01", "09:00:00", "FMASI20AVR26", "BUY", 1, 100),
+            ],
+        )
+
+        contract_metrics = compute_contract_metrics(contracts_priced, transactions_validated, SETTINGS)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cmp_portfolio = build_cmp_portfolio_view(contract_metrics, pd.DataFrame())
+
+        self.assertTrue(bool(cmp_portfolio.iloc[0]["within_tolerance"]))
+        future_warnings = [warning for warning in caught if issubclass(warning.category, FutureWarning)]
+        self.assertEqual(future_warnings, [])
 
 
 if __name__ == "__main__":

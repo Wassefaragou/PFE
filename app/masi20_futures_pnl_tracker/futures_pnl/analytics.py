@@ -281,7 +281,12 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
     ]
     for column in numeric_fill_columns:
         portfolio[column] = pd.to_numeric(portfolio[column], errors="coerce").fillna(0.0)
-    portfolio["within_tolerance"] = portfolio["within_tolerance"].fillna(True)
+    portfolio["within_tolerance"] = (
+        portfolio["within_tolerance"]
+        .astype("boolean")
+        .fillna(True)
+        .astype(bool)
+    )
 
     portfolio["abs_position"] = portfolio["cmp_final_position"].abs()
     portfolio["side_label"] = portfolio["cmp_final_position"].map(_side_label_from_position)

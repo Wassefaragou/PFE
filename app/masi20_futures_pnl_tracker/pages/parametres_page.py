@@ -43,7 +43,7 @@ default_position_limit_value = _optional_number(settings.get("default_position_l
 
 render_hero(
     "Parametres globaux",
-    "Parametres globaux de tick, de frais et de limites. Le MtM se renseigne desormais contrat par contrat dans le referentiel.",
+    "Parametres globaux de tick, de frais et de limites. Les cours de valorisation se renseignent contrat par contrat dans le referentiel.",
 )
 
 render_metric_cards(
@@ -71,14 +71,14 @@ render_metric_cards(
 
 render_section_header(
     "Modifier les parametres",
-    "Configuration globale hors MtM.",
+    "Configuration globale hors cours de valorisation.",
     step="01",
     label="Configuration",
 )
 
 render_micro_note(
-    "Valorisation",
-    "Le MtM n'est plus saisi ici. Il se renseigne directement dans le referentiel contrats, ligne par ligne.",
+    "Cours de valorisation",
+    "Les cours de valorisation ne sont plus saisis ici. Ils se renseignent directement dans le referentiel contrats, ligne par ligne.",
     tone="info",
 )
 

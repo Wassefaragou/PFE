@@ -15,7 +15,6 @@ def compute_theoretical_prices(contracts_df: pd.DataFrame, settings: dict) -> pd
     contracts["days_to_expiry"] = (contracts["expiry_date_parsed"] - valuation_date).dt.days
     contracts["settlement_price_points"] = pd.to_numeric(contracts["settlement_price_points"], errors="coerce")
     contracts["mtm_price"] = contracts["settlement_price_points"]
-
     contracts["mtm_source"] = np.select(
         [
             contracts["settlement_price_points"].notna(),
@@ -23,6 +22,7 @@ def compute_theoretical_prices(contracts_df: pd.DataFrame, settings: dict) -> pd
         ["contract"],
         default="missing",
     )
+
     contracts["expiry_alert"] = np.select(
         [
             contracts["days_to_expiry"].lt(0),
