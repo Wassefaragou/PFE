@@ -86,8 +86,8 @@ render_metric_cards(
 )
 
 valid_contracts = (
-    state["contracts_priced"]
-    .loc[state["contracts_priced"]["is_valid"].fillna(False), "contract_code"]
+    state["contracts_ready"]
+    .loc[state["contracts_ready"]["is_valid"].fillna(False), "contract_code"]
     .drop_duplicates()
     .tolist()
 )

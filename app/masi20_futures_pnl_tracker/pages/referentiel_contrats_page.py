@@ -29,7 +29,7 @@ state = load_app_state()
 render_sidebar_tools(state)
 
 contracts_raw = state["contracts_raw"]
-contracts_priced = state["contracts_priced"]
+contracts_ready = state["contracts_ready"]
 contract_issues = state["contract_issues"]
 
 
@@ -79,8 +79,8 @@ render_hero(
     "Ajoutez, modifiez et supprimez les contrats suivis par le tracker.",
 )
 
-with_settlement = int(contracts_priced["settlement_price_points"].notna().sum()) if not contracts_priced.empty else 0
-invalid_count = int(contracts_priced["is_valid"].eq(False).sum()) if not contracts_priced.empty else 0
+with_settlement = int(contracts_ready["settlement_price_points"].notna().sum()) if not contracts_ready.empty else 0
+invalid_count = int(contracts_ready["is_valid"].eq(False).sum()) if not contracts_ready.empty else 0
 
 render_metric_cards(
     [
@@ -194,9 +194,9 @@ display_columns = [
     "days_to_expiry",
     "expiry_alert",
 ]
-if contracts_priced.empty:
+if contracts_ready.empty:
     st.info("Aucun contrat disponible.")
 else:
-    render_data_table(contracts_priced, display_columns)
+    render_data_table(contracts_ready, display_columns)
 
 render_footer()

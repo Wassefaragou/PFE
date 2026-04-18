@@ -1,10 +1,24 @@
 # -*- coding: utf-8 -*-
-import streamlit as st
-import pandas as pd
+import hashlib
+import io
+import json
+import math
+import os
+import re
+import socket
+import ssl
+import time
+import traceback
+import unicodedata
+from datetime import datetime
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 import numpy as np
-import plotly.graph_objects as go
+import pandas as pd
 import plotly.express as px
-import io, time, hashlib, math
+import plotly.graph_objects as go
+import streamlit as st
 from masi20_index_replication_engine import (
     prepare_data, run_rolling, run_simple_replication, compute_rebal_schedule,
     TRAIN_DAYS, TEST_DAYS, REBAL_DAYS, greedy_round_l2, load_factors,
@@ -12,14 +26,315 @@ from masi20_index_replication_engine import (
 )
 
 APP_TITLE = "MASI20 Index Replication"
-
 NAVIGATION_STATE_KEY = 'selected_app'
+APP_ICON_URL = "https://www.google.com/s2/favicons?domain=attijariwafabank.com&sz=128"
+PRICE_SOURCE_MANUAL = "Saisie manuelle"
+PRICE_SOURCE_FILE = "Fichier prix"
+PRICE_SOURCE_API = "Fetch API BVC"
+MASI20_INDEX_CODE = "MSI20"
+MASI20_INDEX_PAGE_URL = f"https://www.casablanca-bourse.com/fr/live-market/indices/{MASI20_INDEX_CODE}"
+BVC_PROXY_BASE_URL = "https://www.casablanca-bourse.com/api/proxy"
+EXPECTED_MASI20_TITLES = 20
+BVC_MARKET_ROWS_STATE_KEY = "replication_bvc_market_rows"
+BVC_MARKET_FETCHED_AT_STATE_KEY = "replication_bvc_market_fetched_at"
+MASI20_TICKER_ALIASES = {
+    "ADH": "DOUJA PROM ADDOHA",
+    "ADI": "ALLIANCES",
+    "AKT": "AKDITAL",
+    "ATW": "ATTIJARIWAFA BANK",
+    "BCP": "BCP",
+    "BOA": "BANK OF AFRICA",
+    "CFG": "CFG BANK",
+    "CDM": "CDM",
+    "CMA": "CIMENTS DU MAROC",
+    "CSR": "COSUMAR",
+    "CMG": "CMGP GROUP",
+    "IAM": "ITISSALAT AL-MAGHRIB",
+    "LBV": "LABEL VIE",
+    "LHM": "LAFARGEHOLCIM MAROC",
+    "SID": "SONASID",
+    "MSA": "SODEP-Marsa Maroc",
+    "JET": "JET CONTRACTORS",
+    "RDS": "RESIDENCES DAR SAADA",
+    "TGC": "TGCC S.A",
+    "TQM": "TAQA MOROCCO",
+}
+MASI20_LONG_TO_SHORT = {
+    normalize_ticker(long_name): short_code
+    for short_code, long_name in MASI20_TICKER_ALIASES.items()
+}
+
+
+def infer_selection_method_label(method_info):
+    info = (method_info or "").lower()
+    if not info or 'manual' in info:
+        return None
+    if 'beta' in info:
+        return "Beta"
+    if 'exhaustive' in info:
+        return "Exhaustive DE"
+    if 'corr' in info and 'cap' in info:
+        return "Corr*Cap"
+    if 'corr' in info and 'float' in info:
+        return "Corr*Float"
+    if 'ledoit' in info or 'lw' in info:
+        return "LW"
+    return "Lasso"
+
+
+def format_weight_records(df, method_label):
+    display_df = df.copy()
+    rename_map = {'Poids DE (%)': 'Poids (%)'}
+
+    if 'Rebal #' in display_df.columns:
+        rename_map['Rebal #'] = 'Rebal'
+    if 'Date Rebal' in display_df.columns:
+        rename_map['Date Rebal'] = 'Date'
+
+    if method_label:
+        rename_map['Score'] = f'Score {method_label}'
+        rename_map['Rang'] = f'Rang {method_label}'
+    else:
+        drop_cols = [col for col in ('Score', 'Rang') if col in display_df.columns]
+        if drop_cols:
+            display_df = display_df.drop(columns=drop_cols)
+
+    return display_df.rename(columns=rename_map)
+
+
+def run_with_elapsed(func, *args, **kwargs):
+    t0 = time.time()
+    result = func(*args, **kwargs)
+    return result, time.time() - t0
+
+
+def decode_text_file(raw_bytes):
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return raw_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw_bytes.decode("utf-8", errors="replace")
+
+
+def normalize_bvc_key(value):
+    normalized = unicodedata.normalize("NFKD", str(value))
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "_", ascii_text.lower()).strip("_")
+
+
+def clean_bvc_title(value):
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    text = re.sub(r"\s+MC\s+Equity$", "", text, flags=re.IGNORECASE)
+    if not text or text.lower() in {"nan", "na", "none", "-"}:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def fetch_remote_payload(url, accept, timeout=15.0):
+    request = Request(
+        url,
+        headers={
+            "Accept": accept,
+            "Referer": MASI20_INDEX_PAGE_URL,
+            "User-Agent": "MASI20-Index-Replication/1.0",
+        },
+    )
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        try:
+            with urlopen(request, timeout=timeout, context=ssl._create_unverified_context()) as response:
+                return response.read()
+        except HTTPError as exc:
+            raise RuntimeError(f"Erreur Casablanca Bourse ({exc.code}) sur {url}.") from exc
+        except URLError as exc:
+            reason = getattr(exc, "reason", None)
+            is_timeout = isinstance(reason, (TimeoutError, socket.timeout))
+            if is_timeout and attempt + 1 < max_attempts:
+                continue
+            if is_timeout:
+                raise RuntimeError(
+                    "La Bourse de Casablanca a mis trop de temps a repondre. Reessayez dans quelques secondes."
+                ) from exc
+            raise RuntimeError(f"Connexion Casablanca Bourse impossible pour {url}.") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            if attempt + 1 < max_attempts:
+                continue
+            raise RuntimeError(
+                "La Bourse de Casablanca a mis trop de temps a repondre. Reessayez dans quelques secondes."
+            ) from exc
+
+
+def fetch_remote_json(url, timeout=15.0):
+    raw_payload = fetch_remote_payload(
+        url,
+        accept="application/json, application/vnd.api+json, text/plain, */*",
+        timeout=timeout,
+    )
+    try:
+        return json.loads(raw_payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Reponse JSON invalide pour {url}.") from exc
+
+
+def fetch_remote_text(url, timeout=15.0):
+    raw_payload = fetch_remote_payload(
+        url,
+        accept="text/html, application/json;q=0.9, */*;q=0.8",
+        timeout=timeout,
+    )
+    return decode_text_file(raw_payload)
+
+
+def proxy_bvc_api_url(url):
+    return (
+        url.replace("https://api.casablanca-bourse.com", BVC_PROXY_BASE_URL)
+        .replace("http://api.casablanca-bourse.com", BVC_PROXY_BASE_URL)
+    )
+
+
+def extract_next_build_id(page_html):
+    build_match = re.search(r'"buildId":"([^"]+)"', page_html)
+    if build_match:
+        return build_match.group(1)
+
+    manifest_match = re.search(r"/_next/static/([^/]+)/_buildManifest\\.js", page_html)
+    if manifest_match:
+        return manifest_match.group(1)
+
+    raise RuntimeError("Build Next.js introuvable sur la page MSI20.")
+
+
+def build_market_watch_rows(page_payload):
+    included = {
+        item.get("id"): item
+        for item in page_payload.get("included", [])
+        if item.get("type") == "instrument"
+    }
+
+    rows = []
+    for item in page_payload.get("data", []):
+        attributes = item.get("attributes") or {}
+        symbol_info = ((item.get("relationships") or {}).get("symbol") or {}).get("data") or {}
+        instrument_id = symbol_info.get("id")
+        instrument_attributes = (included.get(instrument_id) or {}).get("attributes") or {}
+        ticker = clean_bvc_title(
+            instrument_attributes.get("libelleFR")
+            or instrument_attributes.get("libelleEN")
+            or instrument_id
+        )
+        if not ticker:
+            continue
+
+        try:
+            price_value = float(attributes["coursCourant"])
+            cap_value = float(attributes["capitalisation"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        rows.append(
+            {
+                "Ticker": ticker,
+                "Cours": price_value,
+                "Capitalisation": cap_value,
+            }
+        )
+
+    return rows
+
+
+def fetch_masi20_market_snapshot(timeout=20.0):
+    page_html = fetch_remote_text(MASI20_INDEX_PAGE_URL, timeout=timeout)
+    build_id = extract_next_build_id(page_html)
+    next_data_url = (
+        f"https://www.casablanca-bourse.com/_next/data/{build_id}/fr/live-market/indices/{MASI20_INDEX_CODE}.json"
+    )
+    next_payload = fetch_remote_json(next_data_url, timeout=timeout)
+
+    try:
+        paragraphs = next_payload["pageProps"]["node"]["field_vactory_paragraphs"]
+        composition_paragraph = next(
+            paragraph
+            for paragraph in paragraphs
+            if (paragraph.get("field_vactory_component") or {}).get("widget_id")
+            == "bourse_data_listing:index-composition"
+        )
+        widget_data = json.loads(composition_paragraph["field_vactory_component"]["widget_data"])
+        first_page_payload = widget_data["components"][0]["collection"]["data"]
+    except (KeyError, StopIteration, json.JSONDecodeError) as exc:
+        raise RuntimeError("Structure inattendue pour la composition MSI20.") from exc
+
+    rows = build_market_watch_rows(first_page_payload)
+    next_page_url = (((first_page_payload.get("links") or {}).get("next") or {}).get("href"))
+    visited_urls = set()
+
+    while next_page_url and next_page_url not in visited_urls:
+        visited_urls.add(next_page_url)
+        proxy_url = proxy_bvc_api_url(next_page_url)
+        next_page_payload = fetch_remote_json(proxy_url, timeout=timeout)
+        rows.extend(build_market_watch_rows(next_page_payload))
+        next_page_url = (((next_page_payload.get("links") or {}).get("next") or {}).get("href"))
+
+    deduplicated_rows = []
+    seen_titles = set()
+    for row in rows:
+        ticker = str(row["Ticker"])
+        if ticker in seen_titles:
+            continue
+        seen_titles.add(ticker)
+        deduplicated_rows.append(row)
+
+    if len(deduplicated_rows) != EXPECTED_MASI20_TITLES:
+        raise RuntimeError(
+            f"La composition fetchee contient {len(deduplicated_rows)} titres au lieu de {EXPECTED_MASI20_TITLES}."
+        )
+
+    fetched_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    return deduplicated_rows, fetched_at
+
+
+def format_fetch_timestamp(value):
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return "-"
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def build_bvc_price_lookup(rows):
+    lookup = {}
+    for row in rows:
+        ticker = clean_bvc_title(row.get("Ticker"))
+        try:
+            price = float(row.get("Cours"))
+        except (TypeError, ValueError):
+            continue
+
+        normalized_title = normalize_ticker(ticker)
+        candidate_keys = {normalized_title}
+        short_code = MASI20_LONG_TO_SHORT.get(normalized_title)
+        if short_code:
+            candidate_keys.add(short_code)
+
+        normalized_key = normalize_bvc_key(ticker)
+        for alias_code, alias_name in MASI20_TICKER_ALIASES.items():
+            if normalize_bvc_key(alias_name) == normalized_key:
+                candidate_keys.add(alias_code)
+                candidate_keys.add(normalize_ticker(alias_name))
+                break
+
+        for key in candidate_keys:
+            if key:
+                lookup[key] = price
+    return lookup
 
 
 def run():
     st.set_page_config(
         page_title=APP_TITLE,
-        page_icon="https://www.google.com/s2/favicons?domain=attijariwafabank.com&sz=128",
+        page_icon=APP_ICON_URL,
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -32,7 +347,6 @@ def run():
     # ══════════════════════════════════════════════════════════════
     # PREMIUM CSS
     # ══════════════════════════════════════════════════════════════
-    import os
     css_path = os.path.join(os.path.dirname(__file__), "style.css")
     with open(css_path, "r", encoding="utf-8") as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
@@ -128,7 +442,7 @@ def run():
 
 
 
-    def create_export_excel(result, data, mode):
+    def create_export_excel(result, mode):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             if mode == 'backtest':
@@ -177,12 +491,17 @@ def run():
         with c1:
             V = st.number_input("Budget (MAD)", min_value=0.0, value=100000.0, step=1000.0, key=f"{key_prefix}_V")
         with c2:
-            price_mode = st.radio("Prix", ["Saisie manuelle", "Fichier prix"], horizontal=True, key=f"{key_prefix}_pmode")
+            price_mode = st.radio(
+                "Prix",
+                [PRICE_SOURCE_MANUAL, PRICE_SOURCE_FILE, PRICE_SOURCE_API],
+                horizontal=True,
+                key=f"{key_prefix}_pmode",
+            )
             
         tickers = df_w_selected['Titre'].tolist()
         weights_target = df_w_selected['Poids DE (%)'].values / 100.0
         
-        if price_mode == "Fichier prix":
+        if price_mode == PRICE_SOURCE_FILE:
             price_file = st.file_uploader("Fichier prix (CSV/XLS/XLSX)", type=['csv', 'xlsx', 'xls'], key=f"{key_prefix}_pfile")
             imported_prices = {}
             if price_file is not None:
@@ -213,11 +532,44 @@ def run():
                 except Exception as e:
                     st.error(f"❌ Lecture impossible : {e}")
                     
-            # Initialize editor data
+            editor_data = [{"ticker": t, "price": imported_prices.get(normalize_ticker(t), 0.0)} for t in tickers]
+        elif price_mode == PRICE_SOURCE_API:
+            st.caption("Récupère les cours actions via la même API Casablanca Bourse que le pricer.")
+
+            if st.button("Fetch prix MASI20", key=f"{key_prefix}_fetch_bvc_prices", width='stretch'):
+                try:
+                    fetched_rows, fetched_at = fetch_masi20_market_snapshot()
+                    st.session_state[BVC_MARKET_ROWS_STATE_KEY] = fetched_rows
+                    st.session_state[BVC_MARKET_FETCHED_AT_STATE_KEY] = fetched_at
+                    st.success(f"✅ {len(fetched_rows)} titres récupérés depuis Casablanca Bourse.")
+                except Exception as exc:
+                    st.error(f"❌ Fetch impossible : {exc}")
+
+            fetched_rows = st.session_state.get(BVC_MARKET_ROWS_STATE_KEY, [])
+            fetched_at = st.session_state.get(BVC_MARKET_FETCHED_AT_STATE_KEY)
+            st.caption(f"Dernier fetch : {format_fetch_timestamp(fetched_at)}")
+
+            api_prices = build_bvc_price_lookup(fetched_rows)
             editor_data = []
-            for t in tickers:
-                p = imported_prices.get(normalize_ticker(t), 0.0)
-                editor_data.append({"ticker": t, "price": p})
+            matched_titles = []
+            missing_titles = []
+            for ticker in tickers:
+                price_value = api_prices.get(normalize_ticker(ticker), 0.0)
+                editor_data.append({"ticker": ticker, "price": price_value})
+                if price_value > 0:
+                    matched_titles.append(ticker)
+                else:
+                    missing_titles.append(ticker)
+
+            if fetched_rows:
+                if matched_titles:
+                    st.info(
+                        f"{len(matched_titles)}/{len(tickers)} titre(s) sélectionné(s) ont été pré-remplis depuis l'API."
+                    )
+                if missing_titles:
+                    st.warning("Prix introuvables dans le fetch pour : " + ", ".join(missing_titles))
+            else:
+                st.info("Cliquez sur le bouton de fetch pour pré-remplir les prix depuis Casablanca Bourse.")
         else:
             editor_data = [{"ticker": t, "price": 0.0} for t in tickers]
         
@@ -401,38 +753,11 @@ def run():
                                    title=f'Allocation rebal #{sel_rebal}')
                 st.plotly_chart(fig4, width='stretch')
 
-            # Filtration et renommage des colonnes de score selon la méthode
-            display_sel_w = sel_w.copy()
-            
-            # Déterminer le label de la méthode
-            # On peut essayer de le deviner via result['hyper_records'] ou passer l'info
-            method_label = "Lasso" # par défaut
+            method_info = ''
             if 'hyper_records' in result and len(result['hyper_records']) > 0:
-                method_info = result['hyper_records'][0].get('LASSO Méthode', '').lower()
-                if 'beta' in method_info: method_label = "Beta"
-                elif 'exhaustive' in method_info: method_label = "Exhaustive DE"
-                elif 'corr' in method_info and 'cap' in method_info: method_label = "Corr*Cap"
-                elif 'corr' in method_info and 'float' in method_info: method_label = "Corr*Float"
-                elif 'ledoit' in method_info or 'lw' in method_info: method_label = "LW"
-                elif 'manual' in method_info: method_label = None
-
-            if method_label:
-                display_sel_w = display_sel_w.rename(columns={
-                    'Rebal #': 'Rebal',
-                    'Date Rebal': 'Date',
-                    'Poids DE (%)': 'Poids (%)',
-                    'Score': f'Score {method_label}',
-                    'Rang': f'Rang {method_label}'
-                })
-            else:
-                # Mode manuel, on retire les colonnes de score qui n'ont pas de sens
-                if 'Score' in display_sel_w.columns:
-                    display_sel_w = display_sel_w.drop(columns=['Score', 'Rang'])
-                display_sel_w = display_sel_w.rename(columns={
-                    'Rebal #': 'Rebal',
-                    'Date Rebal': 'Date',
-                    'Poids DE (%)': 'Poids (%)',
-                })
+                method_info = result['hyper_records'][0].get('LASSO Méthode', '')
+            method_label = infer_selection_method_label(method_info)
+            display_sel_w = format_weight_records(sel_w, method_label)
 
             st.dataframe(display_sel_w, width='stretch', height=350)
             
@@ -471,7 +796,7 @@ def run():
 
         # Export
         st.markdown('<div style="height:1rem"></div>', unsafe_allow_html=True)
-        excel_data = create_export_excel(result, data, 'backtest')
+        excel_data = create_export_excel(result, 'backtest')
         st.download_button("📥 Télécharger Excel", data=excel_data,
                            file_name="resultats_backtest.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -499,27 +824,9 @@ def run():
                                  textfont=dict(color='#94a3b8', size=11), marker_line=dict(width=0)))
             fig.update_layout(**CHART_LAYOUT, height=460, title='Portefeuille optimal')
             st.plotly_chart(fig, width='stretch')
-            # Filtration et renommage des colonnes de score selon la méthode
-            display_df_w = df_w.copy()
-            
-            method_info = result.get('lasso_info', {}).get('method', result.get('lasso_info', {}).get('alpha_method', '')).lower()
-            method_label = "Lasso"
-            if 'beta' in method_info: method_label = "Beta"
-            elif 'exhaustive' in method_info: method_label = "Exhaustive DE"
-            elif 'corr' in method_info and 'cap' in method_info: method_label = "Corr*Cap"
-            elif 'corr' in method_info and 'float' in method_info: method_label = "Corr*Float"
-            elif 'ledoit' in method_info or 'lw' in method_info: method_label = "LW"
-            elif not method_info: method_label = None # Manuel
-
-            if method_label:
-                display_df_w = display_df_w.rename(columns={
-                    'Poids DE (%)': 'Poids (%)',
-                    'Score': f'Score {method_label}',
-                    'Rang': f'Rang {method_label}'
-                })
-            elif 'Score' in display_df_w.columns:
-                display_df_w = display_df_w.drop(columns=['Score', 'Rang'])
-                display_df_w = display_df_w.rename(columns={'Poids DE (%)': 'Poids (%)'})
+            method_info = result.get('lasso_info', {}).get('method', result.get('lasso_info', {}).get('alpha_method', ''))
+            method_label = infer_selection_method_label(method_info)
+            display_df_w = format_weight_records(df_w, method_label)
 
             st.dataframe(display_df_w, width='stretch')
             
@@ -537,7 +844,7 @@ def run():
             st.plotly_chart(fig2, width='stretch')
 
         st.markdown('<div style="height:1rem"></div>', unsafe_allow_html=True)
-        excel_data = create_export_excel(result, data, 'simple')
+        excel_data = create_export_excel(result, 'simple')
         st.download_button("📥 Télécharger Excel", data=excel_data,
                            file_name="resultats_replication_simple.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -573,7 +880,7 @@ def run():
     with st.sidebar:
         st.markdown(f"""
         <div class="sidebar-logo" style="display: flex; align-items: center; margin-bottom: 20px;">
-            <img src="https://www.google.com/s2/favicons?domain=attijariwafabank.com&sz=128" style="width: 40px; margin-right: 12px; border-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+            <img src="{APP_ICON_URL}" style="width: 40px; margin-right: 12px; border-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
             <div class="logo-text" style="font-size: 1.1rem; font-weight: 600;">{APP_TITLE}</div>
         </div>
         """, unsafe_allow_html=True)
@@ -849,11 +1156,7 @@ def run():
                     st.markdown('<div class="alert-info">ℹ️ Sélectionnez au moins un titre.</div>', unsafe_allow_html=True)
                     weights_valid = False
                 else:
-                    if selection_method not in ['manual', 'beta', 'corr_cap', 'lw']:
-                        weight_method = 'de'
-                    elif selection_method in ['beta', 'corr_cap', 'lw']:
-                        weight_method = 'de'
-                    else:
+                    if selection_method == 'manual':
                         weight_method_choice = st.radio(
                             "Pondération", 
                             ["Optimisée", "Manuelle"], 
@@ -862,6 +1165,8 @@ def run():
                             on_change=clear_results
                         )
                         weight_method = 'de' if "Optimisée" in weight_method_choice else 'manual'
+                    else:
+                        weight_method = 'de'
                     
                     if weight_method == 'de':
                         st.markdown("##### 📌 Contraintes")
@@ -1075,16 +1380,39 @@ def run():
                         progress_bar.progress(current / total)
                         lbl = info.strftime('%Y-%m-%d') if hasattr(info, 'strftime') else info
                         status_text.markdown(f"⏳ **Rebal {current}/{total}** — {lbl}")
-                    t0 = time.time()
-                    result = run_rolling(data, K=user_k, selected_indices=selected_indices, selection_method=selection_method, weight_method=weight_method, manual_weights=weights_array, progress_callback=progress_cb, selected_rebals=chosen_rebal_list, target_beta=target_beta, train_days=train_days, test_days=test_days, rebal_days=rebal_days, max_weight=max_weight)
-                    elapsed = time.time() - t0
+                    result, elapsed = run_with_elapsed(
+                        run_rolling,
+                        data,
+                        K=user_k,
+                        selected_indices=selected_indices,
+                        selection_method=selection_method,
+                        weight_method=weight_method,
+                        manual_weights=weights_array,
+                        progress_callback=progress_cb,
+                        selected_rebals=chosen_rebal_list,
+                        target_beta=target_beta,
+                        train_days=train_days,
+                        test_days=test_days,
+                        rebal_days=rebal_days,
+                        max_weight=max_weight,
+                    )
                 else:
                     def progress_cb(current, total, info):
                         progress_bar.progress(current / total)
                         status_text.markdown(f"⏳ **Étape {current}/{total}** — {info}")
-                    t0 = time.time()
-                    result = run_simple_replication(data, K=user_k, selected_indices=selected_indices, selection_method=selection_method, weight_method=weight_method, manual_weights=weights_array, progress_callback=progress_cb, target_beta=target_beta, train_days=train_days, max_weight=max_weight)
-                    elapsed = time.time() - t0
+                    result, elapsed = run_with_elapsed(
+                        run_simple_replication,
+                        data,
+                        K=user_k,
+                        selected_indices=selected_indices,
+                        selection_method=selection_method,
+                        weight_method=weight_method,
+                        manual_weights=weights_array,
+                        progress_callback=progress_cb,
+                        target_beta=target_beta,
+                        train_days=train_days,
+                        max_weight=max_weight,
+                    )
 
                 progress_bar.progress(1.0)
                 status_text.empty()
@@ -1113,7 +1441,6 @@ def run():
 
         except Exception as e:
             st.markdown(f'<div class="alert-error">❌ Erreur : <code>{e}</code></div>', unsafe_allow_html=True)
-            import traceback
             st.code(traceback.format_exc())
     else:
         st.markdown("""

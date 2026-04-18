@@ -5,11 +5,12 @@ from datetime import datetime
 import json
 import os
 import re
+import socket
+import ssl
 import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -39,6 +40,31 @@ DISPLAY_YEAR_DAY_COUNT = 360.0
 SPOT_SOURCE_MANUAL = "Manuel"
 SPOT_SOURCE_AUTO = "Automatique"
 MASI20_SPOT_API_URL = "https://api.casablanca-bourse.com/fr/api/bourse/dashboard/index_cotation/512343"
+MASI20_INDEX_CODE = "MSI20"
+MASI20_INDEX_PAGE_URL = f"https://www.casablanca-bourse.com/fr/live-market/indices/{MASI20_INDEX_CODE}"
+BVC_PROXY_BASE_URL = "https://www.casablanca-bourse.com/api/proxy"
+MASI20_TICKER_ALIASES = {
+    "adh": "DOUJA PROM ADDOHA",
+    "adi": "ALLIANCES",
+    "akt": "AKDITAL",
+    "atw": "ATTIJARIWAFA BANK",
+    "bcp": "BCP",
+    "boa": "BANK OF AFRICA",
+    "cfg": "CFG BANK",
+    "cdm": "CDM",
+    "cma": "CIMENTS DU MAROC",
+    "csr": "COSUMAR",
+    "cmg": "CMGP GROUP",
+    "iam": "ITISSALAT AL-MAGHRIB",
+    "lbv": "LABEL VIE",
+    "lhm": "LAFARGEHOLCIM MAROC",
+    "sid": "SONASID",
+    "msa": "SODEP-Marsa Maroc",
+    "jet": "JET CONTRACTORS",
+    "rds": "RESIDENCES DAR SAADA",
+    "tgc": "TGCC S.A",
+    "tqm": "TAQA MOROCCO",
+}
 
 
 def run():
@@ -213,6 +239,168 @@ def run():
         return spot_value, fetched_at
 
 
+    def fetch_remote_payload(url: str, accept: str, timeout: float = 15.0) -> bytes:
+        request = Request(
+            url,
+            headers={
+                "Accept": accept,
+                "Referer": MASI20_INDEX_PAGE_URL,
+                "User-Agent": "MASI20-Futures-Pricer/1.0",
+            },
+        )
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            try:
+                with urlopen(request, timeout=timeout, context=ssl._create_unverified_context()) as response:
+                    return response.read()
+            except HTTPError as exc:
+                raise RuntimeError(f"Erreur Casablanca Bourse ({exc.code}) sur {url}.") from exc
+            except URLError as exc:
+                reason = getattr(exc, "reason", None)
+                is_timeout = isinstance(reason, (TimeoutError, socket.timeout))
+                if is_timeout and attempt + 1 < max_attempts:
+                    continue
+                if is_timeout:
+                    raise RuntimeError(
+                        "La Bourse de Casablanca a mis trop de temps a repondre. Reessayez dans quelques secondes."
+                    ) from exc
+                raise RuntimeError(f"Connexion Casablanca Bourse impossible pour {url}.") from exc
+            except (TimeoutError, socket.timeout) as exc:
+                if attempt + 1 < max_attempts:
+                    continue
+                raise RuntimeError(
+                    "La Bourse de Casablanca a mis trop de temps a repondre. Reessayez dans quelques secondes."
+                ) from exc
+
+
+    def fetch_remote_json(url: str, timeout: float = 15.0) -> dict:
+        raw_payload = fetch_remote_payload(
+            url,
+            accept="application/json, application/vnd.api+json, text/plain, */*",
+            timeout=timeout,
+        )
+        try:
+            return json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Reponse JSON invalide pour {url}.") from exc
+
+
+    def fetch_remote_text(url: str, timeout: float = 15.0) -> str:
+        raw_payload = fetch_remote_payload(
+            url,
+            accept="text/html, application/json;q=0.9, */*;q=0.8",
+            timeout=timeout,
+        )
+        return decode_text_file(raw_payload)
+
+
+    def proxy_bvc_api_url(url: str) -> str:
+        return (
+            url.replace("https://api.casablanca-bourse.com", BVC_PROXY_BASE_URL)
+            .replace("http://api.casablanca-bourse.com", BVC_PROXY_BASE_URL)
+        )
+
+
+    def extract_next_build_id(page_html: str) -> str:
+        build_match = re.search(r'"buildId":"([^"]+)"', page_html)
+        if build_match:
+            return build_match.group(1)
+
+        manifest_match = re.search(r"/_next/static/([^/]+)/_buildManifest\\.js", page_html)
+        if manifest_match:
+            return manifest_match.group(1)
+
+        raise RuntimeError("Build Next.js introuvable sur la page MSI20.")
+
+
+    def build_market_watch_rows(page_payload: dict) -> list[dict[str, float | str]]:
+        included = {
+            item.get("id"): item
+            for item in page_payload.get("included", [])
+            if item.get("type") == "instrument"
+        }
+
+        rows: list[dict[str, float | str]] = []
+        for item in page_payload.get("data", []):
+            attributes = item.get("attributes") or {}
+            symbol_info = ((item.get("relationships") or {}).get("symbol") or {}).get("data") or {}
+            instrument_id = symbol_info.get("id")
+            instrument_attributes = (included.get(instrument_id) or {}).get("attributes") or {}
+            ticker = clean_title(
+                instrument_attributes.get("libelleFR")
+                or instrument_attributes.get("libelleEN")
+                or instrument_id
+            )
+            if not ticker:
+                continue
+
+            try:
+                price_value = float(attributes["coursCourant"])
+                cap_value = float(attributes["capitalisation"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            rows.append(
+                {
+                    "Ticker": ticker,
+                    "Cours": price_value,
+                    "Capitalisation": cap_value,
+                }
+            )
+
+        return rows
+
+
+    def fetch_masi20_market_snapshot(timeout: float = 20.0) -> tuple[list[dict[str, float | str]], str]:
+        page_html = fetch_remote_text(MASI20_INDEX_PAGE_URL, timeout=timeout)
+        build_id = extract_next_build_id(page_html)
+        next_data_url = (
+            f"https://www.casablanca-bourse.com/_next/data/{build_id}/fr/live-market/indices/{MASI20_INDEX_CODE}.json"
+        )
+        next_payload = fetch_remote_json(next_data_url, timeout=timeout)
+
+        try:
+            paragraphs = next_payload["pageProps"]["node"]["field_vactory_paragraphs"]
+            composition_paragraph = next(
+                paragraph
+                for paragraph in paragraphs
+                if (paragraph.get("field_vactory_component") or {}).get("widget_id")
+                == "bourse_data_listing:index-composition"
+            )
+            widget_data = json.loads(composition_paragraph["field_vactory_component"]["widget_data"])
+            first_page_payload = widget_data["components"][0]["collection"]["data"]
+        except (KeyError, StopIteration, json.JSONDecodeError) as exc:
+            raise RuntimeError("Structure inattendue pour la composition MSI20.") from exc
+
+        rows = build_market_watch_rows(first_page_payload)
+        next_page_url = (((first_page_payload.get("links") or {}).get("next") or {}).get("href"))
+        visited_urls: set[str] = set()
+
+        while next_page_url and next_page_url not in visited_urls:
+            visited_urls.add(next_page_url)
+            proxy_url = proxy_bvc_api_url(next_page_url)
+            next_page_payload = fetch_remote_json(proxy_url, timeout=timeout)
+            rows.extend(build_market_watch_rows(next_page_payload))
+            next_page_url = (((next_page_payload.get("links") or {}).get("next") or {}).get("href"))
+
+        deduplicated_rows: list[dict[str, float | str]] = []
+        seen_titles: set[str] = set()
+        for row in rows:
+            ticker = str(row["Ticker"])
+            if ticker in seen_titles:
+                continue
+            seen_titles.add(ticker)
+            deduplicated_rows.append(row)
+
+        if len(deduplicated_rows) != EXPECTED_MASI20_TITLES:
+            raise RuntimeError(
+                f"La composition fetchée contient {len(deduplicated_rows)} titres au lieu de {EXPECTED_MASI20_TITLES}."
+            )
+
+        fetched_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        return deduplicated_rows, fetched_at
+
+
     def format_fetch_timestamp(value: object) -> str:
         parsed = pd.to_datetime(value, errors="coerce")
         if pd.isna(parsed):
@@ -223,10 +411,13 @@ def run():
     def clean_title(value: object) -> str:
         if pd.isna(value):
             return ""
-        text = str(value).strip().replace(" MC Equity", "")
+        text = str(value).strip()
+        text = re.sub(r"\s+MC\s+Equity$", "", text, flags=re.IGNORECASE)
         if not text or text.lower() in {"nan", "na", "none", "-"}:
             return ""
-        return re.sub(r"\s+", " ", text)
+        text = re.sub(r"\s+", " ", text)
+        alias_key = normalize_key(text)
+        return MASI20_TICKER_ALIASES.get(alias_key, text)
 
 
     def title_key(value: object) -> str:
@@ -306,49 +497,6 @@ def run():
         return market_ordered_titles
 
 
-    def parse_bvc_market_file(source_df: pd.DataFrame) -> tuple[list[str], dict, dict, dict]:
-        ticker_col = require_title_first_column(source_df, "marche actions")
-        price_col = find_matching_column(source_df.columns.tolist(), [("cours",), ("prix",), ("price",)])
-        div_col = find_matching_column(source_df.columns.tolist(), [("divid",), ("div",), ("yield",)])
-        cap_col = find_matching_column(
-            source_df.columns.tolist(),
-            [("capitalisation",), ("capitalization",), ("market", "cap"), ("cap", "bours")],
-        )
-
-        if price_col is None and div_col is None and cap_col is None:
-            raise ValueError("Le fichier BVC doit contenir au moins une colonne parmi cours, dividende ou capitalisation.")
-
-        titles: list[str] = []
-        prices: dict[str, float] = {}
-        dividends: dict[str, float] = {}
-        market_caps: dict[str, float] = {}
-
-        for _, row in source_df.iterrows():
-            ticker = clean_title(row[ticker_col])
-            if not ticker or ticker.lower() == "nan":
-                continue
-            titles.append(ticker)
-            if price_col is not None and pd.notna(row[price_col]):
-                try:
-                    prices[ticker] = parse_localized_float(row[price_col])
-                except ValueError:
-                    pass
-            if div_col is not None and pd.notna(row[div_col]):
-                try:
-                    dividends[ticker] = parse_localized_float(row[div_col])
-                except ValueError:
-                    pass
-            if cap_col is not None and pd.notna(row[cap_col]):
-                try:
-                    market_caps[ticker] = parse_localized_float(row[cap_col])
-                except ValueError:
-                    pass
-
-        if not titles:
-            raise ValueError("Aucun titre valide n'a ete trouve dans la base marche actions.")
-        return titles, prices, dividends, market_caps
-
-
     def parse_masi_factors_file(source_df: pd.DataFrame) -> pd.DataFrame:
         ticker_col = require_title_first_column(source_df, "facteurs MASI20")
         flottant_col = find_matching_column(source_df.columns.tolist(), [("flottant",), ("free", "float")])
@@ -387,67 +535,75 @@ def run():
         return pd.DataFrame(records).drop_duplicates(subset=["Ticker_Short"], keep="last").reset_index(drop=True)
 
 
-    def format_market_table(
-        market_curve_table: pd.DataFrame,
-        valuation_date: object | None = None,
-    ) -> pd.DataFrame:
-        if market_curve_table.empty:
-            return market_curve_table
-
-        formatted = market_curve_table.copy()
-        for column in ("Value Date", "Maturity Date"):
-            if column in formatted.columns:
-                formatted[column] = pd.to_datetime(
-                    formatted[column],
-                    dayfirst=True,
-                    errors="coerce",
-                ).dt.strftime("%d/%m/%Y")
-        formatted = formatted.rename(
-            columns={
-                "Value Date": "Date de valeur",
-                "Maturity Date": "Date d'echeance",
-                "Maturity Days": "Maturite courbe (jours)",
-                "Market Rate (%)": "Taux marche (%)",
-                "Source Basis": "Convention source",
-            }
+    def build_dividend_table(titles: list[str], existing_dividends: dict[str, float] | None = None) -> pd.DataFrame:
+        dividend_map = existing_dividends or {}
+        return pd.DataFrame(
+            [
+                {
+                    "Ticker": ticker,
+                    "Dividende (Di)": dividend_map.get(ticker, None),
+                }
+                for ticker in titles
+            ]
         )
-        return formatted
 
 
-    def build_curve_table(
-        curve_display_df: pd.DataFrame,
-        market_curve_table: pd.DataFrame,
+    def build_market_preview_table(
+        titles: list[str],
+        prices: Mapping[str, float],
+        capitalisations: Mapping[str, float],
     ) -> pd.DataFrame:
-        if curve_display_df.empty:
-            return curve_display_df
-
-        combined = curve_display_df.copy()
-        for column in ("Date de valeur", "Date d'echeance"):
-            if column in combined.columns:
-                combined[column] = pd.to_datetime(combined[column], errors="coerce").dt.strftime("%d/%m/%Y")
-
-        combined = combined.rename(columns={"Taux source (%)": "Taux marche (%)"})
-
-        if market_curve_table.empty:
-            return combined
-
-        source_table = format_market_table(market_curve_table)
-        merge_keys = ["Date de valeur", "Date d'echeance", "Maturite courbe (jours)"]
-        source_columns = merge_keys + ["Taux marche (%)", "Convention source"]
-        if any(column not in source_table.columns for column in source_columns):
-            return combined
-
-        return (
-            combined.drop(
-                columns=["Taux marche (%)", "Convention source"],
-                errors="ignore",
-            )
-            .merge(
-                source_table[source_columns].drop_duplicates(subset=merge_keys),
-                on=merge_keys,
-                how="left",
-            )
+        return pd.DataFrame(
+            [
+                {
+                    "Ticker": ticker,
+                    "Cours": prices.get(ticker, float("nan")),
+                    "Capitalisation": capitalisations.get(ticker, float("nan")),
+                }
+                for ticker in titles
+            ]
         )
+
+
+    def ensure_dividend_table_state(
+        state_key: str,
+        target_titles: list[str],
+        existing_dividends: dict[str, float],
+    ) -> None:
+        expected_columns = ["Ticker", "Dividende (Di)"]
+        if state_key not in st.session_state:
+            st.session_state[state_key] = build_dividend_table(target_titles, existing_dividends)
+            return
+
+        current_dividend_df = st.session_state[state_key].copy()
+        current_titles = current_dividend_df["Ticker"].tolist() if "Ticker" in current_dividend_df.columns else []
+        if current_dividend_df.columns.tolist() != expected_columns:
+            st.session_state[state_key] = build_dividend_table(target_titles, existing_dividends)
+        elif target_titles and current_titles != target_titles:
+            st.session_state[state_key] = build_dividend_table(target_titles, existing_dividends)
+
+
+    def parse_dividend_file(source_df: pd.DataFrame) -> dict[str, float]:
+        ticker_col = require_title_first_column(source_df, "dividendes MASI20")
+        div_col = find_matching_column(source_df.columns.tolist(), [("divid",), ("div",), ("yield",)])
+        if div_col is None:
+            raise ValueError("Le fichier dividendes doit contenir Titre et Dividende.")
+
+        dividends: dict[str, float] = {}
+        for _, row in source_df.iterrows():
+            ticker = clean_title(row[ticker_col])
+            if not ticker:
+                continue
+            if pd.isna(row[div_col]):
+                continue
+            try:
+                dividends[ticker] = parse_localized_float(row[div_col])
+            except ValueError:
+                continue
+
+        if not dividends:
+            raise ValueError("Aucun dividende valide n'a ete trouve dans le fichier.")
+        return dividends
 
 
     def days_to_display_years(days_value: object) -> float:
@@ -466,19 +622,6 @@ def run():
         return f"{years_text} {unit}"
 
 
-    def build_curve_table_ui(curve_table: pd.DataFrame) -> pd.DataFrame:
-        if curve_table.empty:
-            return curve_table
-
-        curve_table_ui = curve_table.copy()
-        if "Maturite courbe (jours)" in curve_table_ui.columns:
-            curve_table_ui["Maturite courbe (ans)"] = pd.to_numeric(
-                curve_table_ui["Maturite courbe (jours)"],
-                errors="coerce",
-            ).apply(days_to_display_years)
-        return curve_table_ui
-
-
     def format_future_contract_code(maturity_date) -> str:
         month_codes = {
             1: "JAN",
@@ -495,6 +638,14 @@ def run():
             12: "DEC",
         }
         return f"MASI20 FUTURE {month_codes[maturity_date.month]}{str(maturity_date.year)[-2:]}"
+
+
+    def compact_future_contract_label(label: object) -> str:
+        text = str(label).strip()
+        prefix = "MASI20 FUTURE "
+        if text.startswith(prefix):
+            return text[len(prefix):]
+        return text
 
 
     def build_upcoming_contracts(reference_date, contract_count: int) -> list[dict]:
@@ -517,7 +668,6 @@ def run():
 
     with st.sidebar:
         default_eval_date = datetime.now().date()
-        default_contracts = build_upcoming_contracts(default_eval_date, 1)
 
         if "pricer_spot_mode" not in st.session_state:
             st.session_state["pricer_spot_mode"] = SPOT_SOURCE_MANUAL
@@ -583,7 +733,6 @@ def run():
                 disabled=True,
             )
             spot_price = float(auto_spot_value) if auto_spot_value is not None else float("nan")
-            spot_error = None
             spot_source_caption = (
                 "Recupere automatiquement via l'API Casablanca Bourse"
                 if auto_spot_value is not None
@@ -666,10 +815,8 @@ def run():
     yc_ready = False
     yc_used = None
     r_final = None
-    r_pricing_final = None
     curve_display_df = pd.DataFrame()
     market_curve_table = pd.DataFrame()
-    rate_source_label = ""
     rate_warnings: list[str] = []
     curve_axis_label = "Horizon (ans)"
     effective_eval_date = eval_date
@@ -688,7 +835,8 @@ def run():
                 """
                 <div class="alert-info" style="font-size: 0.82rem; padding: 0.6rem;">
                     Importez le CSV de taux. Les maturites sont detectees depuis les dates,
-                    puis converties vers la convention cible du future.
+                    la courbe affiche les taux BAM originaux, puis chaque future utilise
+                    ensuite sa propre base cible pour determiner son taux sans risque.
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -712,7 +860,6 @@ def run():
             if stored_curve is not None:
                 yc_used = stored_curve
                 yc_ready = True
-                rate_source_label = "CSV marche"
                 if isinstance(stored_table, pd.DataFrame):
                     market_curve_table = stored_table.copy()
                     rate_warnings = market_curve_table.attrs.get("warnings", [])
@@ -744,17 +891,6 @@ def run():
                     source_name="Taux manuel",
                 )
                 yc_ready = True
-                rate_source_label = "Taux manuel"
-                market_curve_table = pd.DataFrame(
-                    [
-                        {
-                            "Type": "Taux manuel",
-                            "Maturite d'ancrage (jours)": max(1, int(effective_days_to_maturity)),
-                            "Convention cible": basis_label_for_days(effective_days_to_maturity),
-                            "Taux saisi (%)": manual_rate_pct,
-                        }
-                    ]
-                )
                 st.markdown(
                     f"""
                     <div class="alert-info" style="font-size: 0.82rem; padding: 0.6rem;">
@@ -767,43 +903,95 @@ def run():
                 st.error(f"Taux manuel invalide : {exc}")
 
     with col_import_bvc:
-        stock_prices = {}
         st.markdown("#### Donnees actions")
         st.markdown(
             """
             <div class="alert-info" style="font-size: 0.85rem; padding: 0.75rem;">
-                Importez deux bases avec <code>Titre</code> en premiere colonne.
-                Base actions : <code>Titre</code>, <code>Cours</code>, <code>Dividende</code>, <code>Capitalisation</code>.
-                Base facteurs : <code>Titre</code>, <code>Flottant</code>, <code>Plafonnement</code>.
-                Les deux bases doivent contenir les 20 memes titres.
+                Recuperez d'abord les <code>Cours</code> et <code>Capitalisations</code> du MASI20,
+                puis importez la base facteurs avec <code>Titre</code> en premiere colonne :
+                <code>Titre</code>, <code>Flottant</code>, <code>Plafonnement</code>.
             </div>
             """,
             unsafe_allow_html=True,
         )
-        price_file = st.file_uploader(
-            "Base actions (CSV/XLSX)",
-            type=["csv", "xlsx", "xls"],
-            key="price_file_upload",
+
+        for state_key, default_value in (
+            ("bvc_prices_imported", {}),
+            ("bvc_dividends_imported", {}),
+            ("bvc_caps_imported", {}),
+            ("bvc_titles_imported", []),
+            ("bvc_market_rows_imported", []),
+            ("bvc_market_auto_fetched_at", None),
+            ("masi_factor_df_imported", pd.DataFrame()),
+        ):
+            if state_key not in st.session_state:
+                st.session_state[state_key] = default_value
+
+        st.caption(f"API marche actions : {MASI20_INDEX_PAGE_URL}")
+        if st.button("Fetch cours + caps MASI20", key="fetch_market_masi20", width="stretch"):
+            try:
+                fetched_market_rows, fetched_market_at = fetch_masi20_market_snapshot()
+            except RuntimeError as exc:
+                st.error(str(exc))
+            else:
+                fetched_titles = [str(row["Ticker"]) for row in fetched_market_rows]
+                st.session_state["bvc_market_rows_imported"] = fetched_market_rows
+                st.session_state["bvc_titles_imported"] = fetched_titles
+                st.session_state["bvc_prices_imported"] = {
+                    str(row["Ticker"]): float(row["Cours"]) for row in fetched_market_rows
+                }
+                st.session_state["bvc_caps_imported"] = {
+                    str(row["Ticker"]): float(row["Capitalisation"]) for row in fetched_market_rows
+                }
+                st.session_state["bvc_market_auto_fetched_at"] = fetched_market_at
+
+                existing_dividends = st.session_state.get("bvc_dividends_imported", {})
+                st.session_state["div_data_free"] = build_dividend_table(fetched_titles, existing_dividends)
+                st.rerun()
+
+        fetched_market_rows = st.session_state.get("bvc_market_rows_imported", [])
+        fetched_market_titles = st.session_state.get("bvc_titles_imported", [])
+        fetched_market_at = st.session_state.get("bvc_market_auto_fetched_at")
+        market_fetch_ready = len(fetched_market_titles) == EXPECTED_MASI20_TITLES
+
+        st.text_input(
+            "Dernier fetch marche",
+            value=format_fetch_timestamp(fetched_market_at),
+            disabled=True,
         )
+        if market_fetch_ready:
+            st.markdown(
+                f"""
+                <div class="alert-success" style="font-size: 0.85rem; padding: 0.5rem;">
+                    Marche actions pret : <strong>{len(fetched_market_titles)} titres</strong> recuperes.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.dataframe(
+                pd.DataFrame(fetched_market_rows),
+                width="stretch",
+                hide_index=True,
+                height=260,
+            )
+        else:
+            st.info("Cliquez sur le bouton de fetch pour charger les cours et capitalisations du MASI20.")
+
         factor_file = st.file_uploader(
             "Base facteurs MASI20 (CSV/XLSX)",
             type=["csv", "xlsx", "xls"],
             key="factor_file_upload",
         )
-        bvc_ready = False
-        st.session_state["bvc_prices_imported"] = {}
-        st.session_state["bvc_dividends_imported"] = {}
-        st.session_state["bvc_caps_imported"] = {}
-        st.session_state["bvc_titles_imported"] = []
-        st.session_state["masi_factor_df_imported"] = pd.DataFrame()
 
-        if price_file is not None and factor_file is not None:
+        if factor_file is None:
+            st.session_state["masi_factor_df_imported"] = pd.DataFrame()
+            if market_fetch_ready:
+                st.info("Importez la base facteurs MASI20 pour lancer la validation.")
+        elif market_fetch_ready:
             try:
-                price_df = read_uploaded_table(price_file)
                 factor_source_df = read_uploaded_table(factor_file)
-                market_titles, parsed_prices, parsed_dividends, parsed_caps = parse_bvc_market_file(price_df)
                 factor_df = parse_masi_factors_file(factor_source_df)
-                validated_titles = validate_masi20_title_lists(market_titles, factor_df["Titre"].tolist())
+                validated_titles = validate_masi20_title_lists(fetched_market_titles, factor_df["Titre"].tolist())
                 title_order = {title_key(title): idx for idx, title in enumerate(validated_titles)}
                 factor_df = (
                     factor_df.assign(_sort_key=factor_df["Titre"].map(lambda value: title_order[title_key(value)]))
@@ -811,22 +999,21 @@ def run():
                     .drop(columns=["_sort_key"])
                     .reset_index(drop=True)
                 )
-                bvc_ready = True
-                st.session_state["bvc_prices_imported"] = parsed_prices
-                st.session_state["bvc_dividends_imported"] = parsed_dividends
-                st.session_state["bvc_caps_imported"] = parsed_caps
                 st.session_state["bvc_titles_imported"] = validated_titles
                 st.session_state["masi_factor_df_imported"] = factor_df
+                st.session_state["div_data_free"] = build_dividend_table(
+                    validated_titles,
+                    st.session_state.get("bvc_dividends_imported", {}),
+                )
                 st.markdown(
                     '<div class="alert-success" style="font-size: 0.85rem; padding: 0.5rem;">Validation OK : 20 titres identiques.</div>',
                     unsafe_allow_html=True,
                 )
             except Exception as exc:
+                st.session_state["masi_factor_df_imported"] = pd.DataFrame()
                 st.error(f"Validation impossible : {exc}")
-        elif price_file is not None or factor_file is not None:
-            st.info("Importez les deux bases pour lancer la validation MASI20.")
         else:
-            st.info("Le controle MASI20 s'activera apres import des deux bases.")
+            st.info("Faites d'abord le fetch des cours et capitalisations, puis importez la base facteurs.")
 
     if yc_ready:
         try:
@@ -837,16 +1024,13 @@ def run():
                 target_maturity=effective_days_to_maturity,
                 valuation_date=effective_eval_date,
             )
-            r_pricing_final = r_final
             curve_display_df = build_yield_curve_df(
                 yc_used,
-                target_maturity=effective_days_to_maturity,
                 valuation_date=effective_eval_date,
             )
         except Exception as exc:
             yc_ready = False
             r_final = None
-            r_pricing_final = None
             curve_display_df = pd.DataFrame()
             st.error(
                 "Courbe de taux inutilisable a la date de valorisation "
@@ -864,23 +1048,55 @@ def run():
         unsafe_allow_html=True,
     )
 
-    tabs_yield = st.tabs(["Graphique", "Tables"])
-
-    with tabs_yield[0]:
-        if not yc_ready:
-            st.empty()
-        else:
-            yc_df = curve_display_df.sort_values(by="Maturite courbe (jours)").reset_index(drop=True)
-            yc_years = yc_df["Maturite courbe (jours)"].apply(days_to_display_years)
-            horizon_max = max(
-                360,
-                int(effective_days_to_maturity) + 360,
-                int(yc_df["Maturite courbe (jours)"].max()),
+    if not yc_ready:
+        st.empty()
+    else:
+        yc_df = curve_display_df.sort_values(by="Maturite courbe (jours)").reset_index(drop=True)
+        yc_years = yc_df["Maturite courbe (jours)"].apply(days_to_display_years)
+        horizon_max = max(
+            360,
+            int(effective_days_to_maturity) + 360,
+            int(yc_df["Maturite courbe (jours)"].max()),
+        )
+        future_rate_points: list[dict[str, object]] = []
+        for contract in selected_contracts:
+            contract_rate = interpolate_rate(
+                contract["days"],
+                yc_used,
+                target_maturity=contract["days"],
+                valuation_date=effective_eval_date,
             )
+            future_rate_points.append(
+                {
+                    "label": contract["label"],
+                    "label_short": compact_future_contract_label(contract["label"]),
+                    "days": contract["days"],
+                    "years": contract["days"] / DISPLAY_YEAR_DAY_COUNT,
+                    "rate_pct": contract_rate * 100.0,
+                }
+            )
+
+        fig_yc = go.Figure()
+
+        if rate_source == RATE_SOURCE_MARKET:
+            fig_yc.add_trace(
+                go.Scatter(
+                    x=yc_years.tolist(),
+                    y=yc_df["Taux source (%)"].tolist(),
+                    mode="lines+markers+text",
+                    name="Courbe BAM - taux originaux",
+                    line=dict(color=COLORS["rate"], width=2.5),
+                    marker=dict(color="#fcd34d", size=10, line=dict(width=2, color="#f59e0b")),
+                    text=yc_df["Maturite courbe (jours)"].apply(format_display_years).tolist(),
+                    textposition="top center",
+                    textfont=dict(color="#fcd34d", size=10),
+                    hovertemplate="Pilier: %{text}<br>Taux BAM: %{y:.3f}%<extra></extra>",
+                )
+            )
+            yaxis_title = "Taux BAM originaux (%)"
+        else:
             fine_days = list(range(1, min(10800, horizon_max) + 1, 5))
             fine_years = [day / DISPLAY_YEAR_DAY_COUNT for day in fine_days]
-            future_years_to_maturity = effective_days_to_maturity / DISPLAY_YEAR_DAY_COUNT
-            future_years_label = format_display_years(effective_days_to_maturity)
             fine_rates = [
                 interpolate_rate(
                     day,
@@ -891,8 +1107,6 @@ def run():
                 * 100.0
                 for day in fine_days
             ]
-
-            fig_yc = go.Figure()
             fig_yc.add_trace(
                 go.Scatter(
                     x=fine_years,
@@ -908,9 +1122,9 @@ def run():
             fig_yc.add_trace(
                 go.Scatter(
                     x=yc_years.tolist(),
-                    y=yc_df["Taux converti (%)"].tolist(),
+                    y=yc_df["Taux source (%)"].tolist(),
                     mode="markers+text",
-                    name="Piliers",
+                    name="Pilier",
                     marker=dict(color="#fcd34d", size=10, line=dict(width=2, color="#f59e0b")),
                     text=yc_df["Maturite courbe (jours)"].apply(format_display_years).tolist(),
                     textposition="top center",
@@ -918,63 +1132,36 @@ def run():
                     hovertemplate="Pilier: %{text}<br>Horizon: %{x:.3f} ans<br>Taux: %{y:.3f}%<extra></extra>",
                 )
             )
+            yaxis_title = "Taux (%)"
+
+        if future_rate_points:
             fig_yc.add_trace(
                 go.Scatter(
-                    x=[future_years_to_maturity],
-                    y=[r_final * 100.0],
+                    x=[point["years"] for point in future_rate_points],
+                    y=[point["rate_pct"] for point in future_rate_points],
                     mode="markers+text",
-                    name=f"Taux future @ {future_years_label}",
+                    name="Taux futures - base cible",
                     marker=dict(color="#00d4aa", size=14, symbol="star", line=dict(width=2, color="white")),
-                    text=[f"{r_final * 100.0:.3f}%"],
+                    text=[str(point["label_short"]) for point in future_rate_points],
                     textposition="top center",
-                    textfont=dict(color="#00d4aa", size=12, family="JetBrains Mono"),
-                    hovertemplate="Future: %{x:.3f} ans<br>Taux: %{y:.3f}%<extra></extra>",
+                    textfont=dict(color="#00d4aa", size=11, family="JetBrains Mono"),
+                    hovertemplate="Future: %{text}<br>Horizon: %{x:.3f} ans<br>Taux retenu: %{y:.3f}%<extra></extra>",
                 )
             )
-            fig_yc.update_layout(
-                **CHART_LAYOUT,
-                height=400,
-                title="Courbe des taux sans risque",
-                xaxis_title=curve_axis_label,
-                yaxis_title="Taux converti (%)",
-            )
-            st.plotly_chart(fig_yc, width="stretch")
-            st.markdown(
-                f"""
-                <div class="alert-success">
-                    <strong>Taux retenu pour le future a {future_years_label} :</strong><br>
-                    <span style="font-family: 'JetBrains Mono'; font-size: 1.3rem; color: #f8fafc;">
-                        r = {r_final * 100.0:.4f}%
-                    </span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    with tabs_yield[1]:
-        if yc_ready:
-            st.markdown("##### Points de courbe")
-            combined_curve_table = build_curve_table_ui(build_curve_table(curve_display_df, market_curve_table))
-            display_columns = [
-                "Date de valeur",
-                "Date d'echeance",
-                "Maturite courbe (ans)",
-                "Taux marche (%)",
-                "Convention source",
-                "Convention cible",
-                "Taux converti (%)",
-            ]
-            st.dataframe(
-                combined_curve_table[display_columns],
-                width="stretch",
-                hide_index=True,
-                height=320,
-            )
-            if rate_source == RATE_SOURCE_MARKET and rate_warnings:
-                with st.expander("Lignes ignorees a l'import"):
-                    for warning in rate_warnings:
-                        st.write(f"- {warning}")
-        else:
-            st.empty()
+
+        fig_yc.update_layout(
+            **CHART_LAYOUT,
+            height=400,
+            title="Courbe des taux sans risque",
+            xaxis_title=curve_axis_label,
+            yaxis_title=yaxis_title,
+        )
+        st.plotly_chart(fig_yc, width="stretch")
+
+        if rate_source == RATE_SOURCE_MARKET and rate_warnings:
+            with st.expander("Lignes ignorees a l'import"):
+                for warning in rate_warnings:
+                    st.write(f"- {warning}")
 
 
     st.markdown(
@@ -998,89 +1185,142 @@ def run():
         weights_source_label = "Base facteurs absente"
 
     div_data_key = "div_data_free"
-    if div_data_key not in st.session_state:
-        st.session_state[div_data_key] = pd.DataFrame(
-            columns=["Ticker", "Cours Actuel (Ci)", "Dividende (Di)", "Capitalisation Boursiere"]
-        )
+    imported_titles = st.session_state.get("bvc_titles_imported", [])
+    imported_prices = st.session_state.get("bvc_prices_imported", {})
+    imported_caps = st.session_state.get("bvc_caps_imported", {})
+    market_source_label = (
+        f"Fetch auto ({len(imported_titles)} titres)"
+        if imported_titles
+        else "Cours/capitalisations non charges"
+    )
+
+    target_dividend_titles = imported_titles or tickers_available
+    existing_dividend_map = st.session_state.get("bvc_dividends_imported", {})
+    ensure_dividend_table_state(div_data_key, target_dividend_titles, existing_dividend_map)
 
     st.markdown(
         """
         <div class="alert-info">
-            Saisissez les cours et dividendes ci-dessous ou importez-les en section 1.
+            Les cours et capitalisations proviennent du fetch de la section 1.
+            Renseignez ici uniquement les dividendes par ticker.
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.caption(f"Source facteurs MASI20 : {weights_source_label}")
+    st.caption(f"Source marche actions : {market_source_label}")
 
-    if bvc_ready and ("bvc_prices_imported" in st.session_state or "bvc_dividends_imported" in st.session_state):
-        current_div_df = st.session_state[div_data_key].copy()
-        imported_titles = st.session_state.get("bvc_titles_imported", [])
-        if imported_titles and not current_div_df.empty:
-            current_div_df = current_div_df[current_div_df["Ticker"].isin(imported_titles)].copy()
-        imported_prices = st.session_state.get("bvc_prices_imported", {})
-        imported_dividends = st.session_state.get("bvc_dividends_imported", {})
-        imported_caps = st.session_state.get("bvc_caps_imported", {})
-        for ticker in imported_titles:
-            if ticker not in current_div_df["Ticker"].values:
-                current_div_df = pd.concat(
-                    [
-                        current_div_df,
-                        pd.DataFrame(
-                            [
-                                {
-                                    "Ticker": ticker,
-                                    "Cours Actuel (Ci)": imported_prices.get(ticker, None),
-                                    "Dividende (Di)": imported_dividends.get(ticker, None),
-                                    "Capitalisation Boursiere": imported_caps.get(ticker, None),
-                                }
-                            ]
-                        ),
-                    ],
-                    ignore_index=True,
-                )
-            else:
-                idx = current_div_df[current_div_df["Ticker"] == ticker].index[0]
-                if ticker in imported_prices:
-                    current_div_df.at[idx, "Cours Actuel (Ci)"] = imported_prices[ticker]
-                if ticker in imported_dividends:
-                    current_div_df.at[idx, "Dividende (Di)"] = imported_dividends[ticker]
-                if ticker in imported_caps:
-                    current_div_df.at[idx, "Capitalisation Boursiere"] = imported_caps[ticker]
-        st.session_state[div_data_key] = current_div_df
+    if imported_titles:
+        with st.expander("Apercu cours / capitalisations fetches", expanded=False):
+            st.dataframe(
+                build_market_preview_table(imported_titles, imported_prices, imported_caps),
+                width="stretch",
+                hide_index=True,
+                height=260,
+            )
+
+    dividend_file = st.file_uploader(
+        "Importer un fichier dividendes (CSV/XLSX)",
+        type=["csv", "xlsx", "xls"],
+        key="dividend_file_upload",
+        help="Colonnes attendues : Titre, Dividende. Les tickers type ADH MC Equity sont acceptes.",
+    )
+
+    if st.button(
+        "Charger le fichier dividendes dans la table",
+        key="load_dividend_file",
+        width="stretch",
+        disabled=dividend_file is None,
+    ):
+        try:
+            dividend_source_df = read_uploaded_table(dividend_file)
+            imported_dividend_map = parse_dividend_file(dividend_source_df)
+            current_div_df = st.session_state[div_data_key].copy()
+            if current_div_df.empty:
+                current_div_df = build_dividend_table(target_dividend_titles or list(imported_dividend_map.keys()))
+
+            index_by_key = {
+                title_key(row["Ticker"]): idx
+                for idx, row in current_div_df.iterrows()
+                if clean_title(row["Ticker"])
+            }
+            ignored_titles: list[str] = []
+            imported_count = 0
+
+            for ticker, dividend_value in imported_dividend_map.items():
+                ticker_key = title_key(ticker)
+                row_idx = index_by_key.get(ticker_key)
+                if row_idx is not None:
+                    current_div_df.at[row_idx, "Dividende (Di)"] = dividend_value
+                    imported_count += 1
+                elif not target_dividend_titles:
+                    current_div_df = pd.concat(
+                        [
+                            current_div_df,
+                            pd.DataFrame([{"Ticker": ticker, "Dividende (Di)": dividend_value}]),
+                        ],
+                        ignore_index=True,
+                    )
+                    index_by_key[ticker_key] = len(current_div_df) - 1
+                    imported_count += 1
+                else:
+                    ignored_titles.append(ticker)
+
+            st.session_state[div_data_key] = current_div_df.reset_index(drop=True)
+            st.session_state["bvc_dividends_imported"] = {
+                str(row["Ticker"]).strip(): float(row["Dividende (Di)"])
+                for _, row in st.session_state[div_data_key].iterrows()
+                if clean_title(row["Ticker"]) and pd.notna(row["Dividende (Di)"])
+            }
+            if ignored_titles:
+                ignored_preview = ", ".join(sorted(set(ignored_titles))[:5])
+                suffix = " ..." if len(set(ignored_titles)) > 5 else ""
+                st.warning(f"Titres ignores (hors table courante) : {ignored_preview}{suffix}")
+            st.success(f"{imported_count} dividendes importes dans la table.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Import dividendes impossible : {exc}")
 
     edited_div_df = st.data_editor(
         st.session_state[div_data_key],
         column_config={
             "Ticker": st.column_config.TextColumn("Ticker"),
-            "Cours Actuel (Ci)": st.column_config.NumberColumn("Cours", min_value=0.0, format="%.2f"),
             "Dividende (Di)": st.column_config.NumberColumn("Dividende (MAD)", min_value=0.0, format="%.2f"),
-            "Capitalisation Boursiere": st.column_config.NumberColumn("Cap. boursiere", min_value=0.0, format="%.2f"),
         },
         width="stretch",
         hide_index=True,
-        num_rows="dynamic",
+        num_rows="fixed" if imported_titles else "dynamic",
         key="div_editor_free",
     )
 
-    stock_prices_dict = {}
+    st.session_state[div_data_key] = edited_div_df.copy()
+
+    stock_prices_dict = {
+        ticker: float(value)
+        for ticker, value in imported_prices.items()
+        if value is not None and pd.notna(value)
+    }
     dividends = {}
-    market_caps_dict = {}
+    market_caps_dict = {
+        ticker: float(value)
+        for ticker, value in imported_caps.items()
+        if value is not None and pd.notna(value)
+    }
     for _, row in edited_div_df.iterrows():
         ticker = str(row["Ticker"]).strip()
         if not ticker or ticker.lower() == "nan":
             continue
-        if pd.notna(row["Cours Actuel (Ci)"]):
-            stock_prices_dict[ticker] = float(row["Cours Actuel (Ci)"])
         if pd.notna(row["Dividende (Di)"]):
             dividends[ticker] = float(row["Dividende (Di)"])
-        if pd.notna(row["Capitalisation Boursiere"]):
-            market_caps_dict[ticker] = float(row["Capitalisation Boursiere"])
+    st.session_state["bvc_dividends_imported"] = dividends.copy()
 
-    weights_details_df = pd.DataFrame()
     dividend_input_warnings = []
     if df_weights is not None:
-        weights, weights_details_df = compute_index_weights_from_caps(df_weights, market_caps_dict)
+        weights, _ = compute_index_weights_from_caps(
+            df_weights,
+            market_caps_dict,
+            include_details=False,
+        )
     else:
         weights = {}
         dividend_input_warnings.append(
@@ -1118,32 +1358,14 @@ def run():
     auto_dividend_ready = bool(weights) and not missing_caps_tickers and not missing_price_tickers and not missing_dividend_tickers
 
     if auto_dividend_ready:
-        div_yield, div_details_df = compute_dividend_yield(stock_prices_dict, dividends, weights)
+        div_yield, _ = compute_dividend_yield(
+            stock_prices_dict,
+            dividends,
+            weights,
+            include_details=False,
+        )
     else:
         div_yield = 0.0
-        div_details_df = pd.DataFrame()
-
-    if not div_details_df.empty and not weights_details_df.empty:
-        div_details_df = div_details_df.merge(
-            weights_details_df[
-                [
-                    column
-                    for column in weights_details_df.columns
-                    if column in {
-                        "Ticker",
-                        "Capitalisation brute",
-                        "Valeur de secours",
-                        "Source valeur",
-                        "Flottant",
-                        "Plafonnement",
-                        "Capitalisation ajustee",
-                        "Poids",
-                    }
-                ]
-            ],
-            on="Ticker",
-            how="left",
-        )
 
     for warning_message in dividend_input_warnings:
         st.warning(warning_message)
@@ -1233,7 +1455,13 @@ def run():
                 target_maturity=contract["days"],
                 valuation_date=effective_eval_date,
             )
-            result_maturity = price_future(spot_price, r_maturity, d_used, contract["days"])
+            result_maturity = price_future(
+                spot_price,
+                r_maturity,
+                d_used,
+                contract["days"],
+                include_breakdown=False,
+            )
             multi_records.append(
                 {
                     "Contrat": contract["label"],

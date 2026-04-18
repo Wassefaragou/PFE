@@ -1,5 +1,3 @@
-import streamlit as st
-
 from futures_pnl.ui import (
     format_currency,
     init_page,

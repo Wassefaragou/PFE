@@ -4,7 +4,7 @@ import time, warnings, os, math, heapq
 import numpy as np
 import pandas as pd
 from itertools import combinations
-from scipy.optimize import minimize
+from scipy.optimize import minimize, nnls
 from sklearn.linear_model import LassoCV
 from sklearn.covariance import LedoitWolf
 
@@ -26,11 +26,15 @@ DE_MUTATION      = (0.4, 1.2)
 DE_RECOMBINATION = 0.8
 DE_TOL           = 1e-9
 DE_SEED_BASE     = 42
+DE_POP_MULTIPLIER = 12
+DE_MIN_POP        = 24
+DE_PBEST_RATE     = 0.35
+DE_ADAPT_RATE     = 0.10
+DE_EARLY_STOP     = 60
+DE_LOGIT_BOUNDS   = (-8.0, 8.0)
+DE_INIT_NOISE     = 0.35
 EXHAUSTIVE_DE_TOP_CANDIDATES = 10
 EXHAUSTIVE_DE_EXACT_LIMIT    = 250
-
-TRANSACTION_COST_BPS = 10
-
 
 def normalize_ticker(value):
     ticker = str(value).strip()
@@ -129,37 +133,96 @@ def params_to_weights(params, max_weight=None):
     return weights[0] if is_vector else weights
 
 
-def optimize_weights_capped(X_sel, y_train, target_beta=None, max_weight=None):
+def weights_to_params(weights, bounds=None, eps=1e-12):
+    arr = np.asarray(weights, dtype=float)
+    is_vector = arr.ndim == 1
+    arr2d = arr.reshape(1, -1) if is_vector else arr
+
+    clipped = np.clip(arr2d, eps, None)
+    clipped = clipped / np.sum(clipped, axis=1, keepdims=True)
+    params = np.log(clipped)
+    params -= np.mean(params, axis=1, keepdims=True)
+
+    if bounds is not None:
+        params = np.clip(params, bounds[0], bounds[1])
+
+    return params[0] if is_vector else params
+
+
+def _normalize_start_weights(weights, max_weight=None):
+    w = np.asarray(weights, dtype=float).copy()
+    upper = 1.0 if max_weight is None else max_weight
+    w = np.clip(w, 0.0, upper)
+    total = np.sum(w)
+    if total <= 1e-12:
+        w = np.ones(len(w), dtype=float) / len(w)
+    else:
+        w = w / total
+
+    if max_weight is not None:
+        w = project_capped_simplex(w, max_weight)
+    return w
+
+
+def _evaluate_param_population(X_sel, y_train, params, target_beta=None, max_weight=None):
+    params_arr = np.asarray(params, dtype=float)
+    is_vector = params_arr.ndim == 1
+    params_2d = params_arr.reshape(1, -1) if is_vector else params_arr
+
+    weights = params_to_weights(params_2d, max_weight=max_weight)
+    port_ret = weights @ X_sel.T
+    diff = port_ret - y_train
+    std_diff = np.std(diff, axis=1)
+
+    penalty = np.zeros(len(std_diff), dtype=float)
+    if target_beta is not None and len(y_train) > 1:
+        var_y = np.var(y_train, ddof=1)
+        if np.isfinite(var_y) and var_y > 1e-12:
+            y_centered = y_train - np.mean(y_train)
+            port_centered = port_ret - np.mean(port_ret, axis=1, keepdims=True)
+            covs = (port_centered @ y_centered) / (len(y_train) - 1)
+            betas = covs / var_y
+            penalty += 10.0 * (betas - target_beta) ** 2
+
+    obj = std_diff + penalty
+    return float(obj[0]) if is_vector else obj
+
+
+def optimize_weights_slsqp(
+    X_sel,
+    y_train,
+    target_beta=None,
+    max_weight=None,
+    starts=None,
+    strategy_label='SLSQP simplex',
+):
     K = X_sel.shape[1]
-    if max_weight is None:
-        raise ValueError("max_weight est requis pour l'optimisation plafonnee.")
-    if K * max_weight < 1.0 - 1e-12:
-        raise ValueError(f"Plafond de poids infaisable: K={K}, max_weight={max_weight:.6f}")
+    upper = 1.0 if max_weight is None else max_weight
+    if upper <= 0 or K * upper < 1.0 - 1e-12:
+        raise ValueError(f"Plafond de poids infaisable: K={K}, max_weight={upper:.6f}")
 
     t0 = time.time()
-    var_y = np.var(y_train, ddof=1) if len(y_train) > 1 else 0.0
-    bounds = [(0.0, max_weight)] * K
+    bounds = [(0.0, upper)] * K
     constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
 
     def obj(w):
-        port_ret = X_sel @ w
-        std_diff = np.std(port_ret - y_train)
-        penalty = 0.0
-        if target_beta is not None and var_y > 0:
-            beta = safe_beta(port_ret, y_train, default=0.0)
-            penalty += 10.0 * (beta - target_beta) ** 2
-        return std_diff + penalty
+        return evaluate_portfolio_objective(X_sel, y_train, w, target_beta=target_beta)
 
-    starts = [project_capped_simplex(np.ones(K) / K, max_weight)]
-    rng = np.random.default_rng(DE_SEED_BASE)
-    for _ in range(max(DE_N_RESTARTS, 5) - 1):
-        starts.append(project_capped_simplex(rng.random(K), max_weight))
+    if starts is None:
+        start_list = [_normalize_start_weights(np.ones(K) / K, max_weight=max_weight)]
+        rng = np.random.default_rng(DE_SEED_BASE)
+        for _ in range(max(DE_N_RESTARTS, 5) - 1):
+            start_list.append(_normalize_start_weights(rng.random(K), max_weight=max_weight))
+        seed_value = DE_SEED_BASE
+    else:
+        start_list = [_normalize_start_weights(start, max_weight=max_weight) for start in starts]
+        seed_value = ''
 
-    best_w = starts[0]
+    best_w = start_list[0]
     best_fun = obj(best_w)
     best_res = None
 
-    for idx, x0 in enumerate(starts):
+    for idx, x0 in enumerate(start_list):
         res = minimize(
             obj,
             x0,
@@ -173,18 +236,20 @@ def optimize_weights_capped(X_sel, y_train, target_beta=None, max_weight=None):
         if candidate_w is None or len(candidate_w) != K:
             candidate_w = x0
 
-        candidate_w = np.clip(candidate_w, 0.0, max_weight)
+        candidate_w = np.clip(candidate_w, 0.0, upper)
         total = candidate_w.sum()
         if total <= 0:
             candidate_w = x0
         else:
-            candidate_w = project_capped_simplex(candidate_w / total, max_weight)
+            candidate_w = candidate_w / total
+            if max_weight is not None:
+                candidate_w = project_capped_simplex(candidate_w, max_weight)
 
         candidate_fun = obj(candidate_w)
         feasible = (
             abs(candidate_w.sum() - 1.0) <= 1e-8
             and np.all(candidate_w >= -1e-10)
-            and np.all(candidate_w <= max_weight + 1e-8)
+            and np.all(candidate_w <= upper + 1e-8)
         )
 
         if feasible and candidate_fun < best_fun:
@@ -195,27 +260,85 @@ def optimize_weights_capped(X_sel, y_train, target_beta=None, max_weight=None):
     best_restart = best_res[0] if best_res is not None else 0
     best_result = best_res[1] if best_res is not None else None
 
-    de_info = {
-        'n_restarts': len(starts),
-        'popsize': len(starts),
+    info = {
+        'n_restarts': len(start_list),
+        'popsize': len(start_list),
         'maxiter': max(DE_MAX_ITER, 200),
-        'strategy': 'SLSQP capped simplex',
+        'strategy': strategy_label,
         'mutation': '',
         'recombination': 0.0,
         'tolerance': DE_TOL,
-        'bounds': f'(0.0, {max_weight:.6f}) + sum(w)=1',
+        'bounds': f'(0.0, {upper:.6f}) + sum(w)=1',
         'polish': True,
         'elapsed': time.time() - t0,
         'obj_value': best_fun,
         'best_restart': best_restart,
-        'seed': DE_SEED_BASE,
+        'seed': seed_value,
         'converged': bool(best_result.success) if best_result is not None else True,
         'message': best_result.message if best_result is not None else 'Projected feasible start',
         'n_iterations': int(best_result.nit) if best_result is not None and hasattr(best_result, 'nit') else 0,
         'n_fev': int(best_result.nfev) if best_result is not None and hasattr(best_result, 'nfev') else 0,
         'convergence_curve': [],
     }
-    return best_w, de_info
+    return best_w, info
+
+
+def _build_de_initial_population(X_sel, y_train, proxy_w, pop_size, rng, bounds):
+    K = X_sel.shape[1]
+    bnd_min, bnd_max = bounds
+    equal_w = np.ones(K, dtype=float) / K
+    midpoint_w = _normalize_start_weights(0.5 * (proxy_w + equal_w))
+
+    seeds = [
+        weights_to_params(proxy_w, bounds=bounds),
+        weights_to_params(equal_w, bounds=bounds),
+        weights_to_params(midpoint_w, bounds=bounds),
+    ]
+
+    proxy_params = seeds[0]
+    equal_params = seeds[1]
+    for base_params in (proxy_params, equal_params):
+        seeds.append(np.clip(base_params + rng.normal(0.0, DE_INIT_NOISE, size=K), bnd_min, bnd_max))
+        seeds.append(np.clip(base_params + rng.normal(0.0, DE_INIT_NOISE * 2.0, size=K), bnd_min, bnd_max))
+
+    population = []
+    for seed in seeds:
+        population.append(np.asarray(seed, dtype=float))
+        if len(population) >= pop_size:
+            break
+
+    alpha_choices = np.array([0.25, 0.5, 1.0, 2.0], dtype=float)
+    while len(population) < pop_size:
+        draw = rng.random()
+        if draw < 0.20:
+            params = rng.uniform(bnd_min, bnd_max, size=K)
+        else:
+            alpha = float(rng.choice(alpha_choices))
+            rand_w = rng.dirichlet(np.full(K, alpha, dtype=float))
+            if draw < 0.65:
+                blended_w = _normalize_start_weights(0.7 * proxy_w + 0.3 * rand_w)
+            elif draw < 0.90:
+                blended_w = rand_w
+            else:
+                blended_w = _normalize_start_weights(0.7 * equal_w + 0.3 * rand_w)
+            params = weights_to_params(blended_w, bounds=bounds)
+            params = np.clip(params + rng.normal(0.0, DE_INIT_NOISE, size=K), bnd_min, bnd_max)
+        population.append(params)
+
+    return np.asarray(population[:pop_size], dtype=float)
+
+
+def optimize_weights_capped(X_sel, y_train, target_beta=None, max_weight=None):
+    if max_weight is None:
+        raise ValueError("max_weight est requis pour l'optimisation plafonnee.")
+    return optimize_weights_slsqp(
+        X_sel,
+        y_train,
+        target_beta=target_beta,
+        max_weight=max_weight,
+        starts=None,
+        strategy_label='SLSQP capped simplex',
+    )
 
 
 def evaluate_portfolio_objective(X_sel, y_train, weights, target_beta=None):
@@ -236,10 +359,13 @@ def compute_proxy_weights(X_sel, y_train, max_weight=None):
     k = X_sel.shape[1]
 
     try:
-        weights = np.linalg.lstsq(X_sel, y_train, rcond=None)[0]
-        weights = np.clip(np.asarray(weights, dtype=float), 0.0, None)
+        weights = nnls(np.asarray(X_sel, dtype=float), np.asarray(y_train, dtype=float))[0]
     except Exception:
-        weights = np.ones(k, dtype=float) / k
+        try:
+            weights = np.linalg.lstsq(X_sel, y_train, rcond=None)[0]
+            weights = np.clip(np.asarray(weights, dtype=float), 0.0, None)
+        except Exception:
+            weights = np.ones(k, dtype=float) / k
 
     total = np.sum(weights)
     if total <= 1e-12:
@@ -331,7 +457,7 @@ def select_exhaustive_de(X_train, y_train, K, target_beta=None, max_weight=None,
         'n_combinations': combos_total,
         'n_finalists': len(finalists),
         'exact_all_combos': exact_all,
-        'proxy_method': 'OLS long-only',
+        'proxy_method': 'NNLS long-only',
         'precomputed_weights': best_weights,
         'precomputed_de_info': best_de_info,
         'selected_combo': list(best_combo),
@@ -652,7 +778,7 @@ def select_lw_forward(X_train, y_train, K):
                     w = w / w.sum()
                 else:
                     w = np.ones(len(S)) / len(S)
-            except:
+            except Exception:
                 w = np.ones(len(S)) / len(S)
                 
             # Calcul J = w' Sigma_SS w - 2 w' sigma_SI + sigma_yy
@@ -691,113 +817,169 @@ def select_lw_forward(X_train, y_train, K):
 
 def optimize_weights_de_robust(X_sel, y_train, target_beta=None, max_weight=None):
     K = X_sel.shape[1]
+    if K == 1:
+        best_w = np.ones(1, dtype=float)
+        return best_w, {
+            'n_restarts': 1,
+            'popsize': 1,
+            'maxiter': 0,
+            'strategy': 'Trivial single-asset solution',
+            'mutation': '',
+            'recombination': 0.0,
+            'tolerance': DE_TOL,
+            'bounds': '(1.0)',
+            'polish': False,
+            'elapsed': 0.0,
+            'obj_value': evaluate_portfolio_objective(X_sel, y_train, best_w, target_beta=target_beta),
+            'best_restart': 0,
+            'seed': '',
+            'converged': True,
+            'message': 'K=1, poids unitaire',
+            'n_iterations': 0,
+            'n_fev': 1,
+            'convergence_curve': [],
+        }
     if max_weight is not None:
         return optimize_weights_capped(X_sel, y_train, target_beta=target_beta, max_weight=max_weight)
 
     t0_global = time.time()
-    best_w     = np.ones(K) / K
-    best_fun   = np.inf
-    best_info  = {}
-    convergence_best = []
-    
-    var_y = np.var(y_train, ddof=1) if len(y_train) > 1 else 0.0
+    best_w = np.ones(K, dtype=float) / K
+    best_fun = evaluate_portfolio_objective(X_sel, y_train, best_w, target_beta=target_beta)
+    best_info = {
+        'best_restart': 0,
+        'seed': DE_SEED_BASE,
+        'converged': True,
+        'message': 'Initialized from equal weights',
+        'n_iterations': 0,
+        'n_fev': 1,
+    }
+    convergence_best = [best_fun]
 
-    bnd_min, bnd_max = -6.0, 6.0
+    bnd_min, bnd_max = DE_LOGIT_BOUNDS
     mut_min, mut_max = DE_MUTATION if isinstance(DE_MUTATION, (tuple, list)) else (0.5, 1.0)
-    pop_size = K * 10
+    pop_size = max(DE_MIN_POP, K * DE_POP_MULTIPLIER)
+    proxy_w = compute_proxy_weights(X_sel, y_train, max_weight=None)
+    equal_w = np.ones(K, dtype=float) / K
+    plateau_tol = max(DE_TOL, 1e-8)
 
     for restart in range(DE_N_RESTARTS):
         seed_i = DE_SEED_BASE + restart
-        np.random.seed(seed_i)
-        
-        pop = np.random.uniform(bnd_min, bnd_max, (pop_size, K))
-        
-        def eval_pop(p):
-            w = params_to_weights(p, max_weight=max_weight)
-            port_ret = w @ X_sel.T
-            diff = port_ret - y_train
-            std_diff = np.std(diff, axis=1)
-            
-            penalty = 0.0
-            if target_beta is not None and var_y > 0:
-                port_ret_centered = port_ret - np.mean(port_ret, axis=1, keepdims=True)
-                y_train_centered = y_train - np.mean(y_train)
-                covs = np.sum(port_ret_centered * y_train_centered, axis=1) / (len(y_train) - 1)
-                betas = covs / var_y
-                penalty += 10.0 * (betas - target_beta)**2
-                
-            return std_diff + penalty
-            
-        fitness = eval_pop(pop)
-        best_idx = np.argmin(fitness)
-        best_cost = fitness[best_idx]
-        
-        convergence_curve = []
-        
-        for it in range(DE_MAX_ITER):
-            r1 = np.random.randint(0, pop_size, pop_size)
-            r2 = np.random.randint(0, pop_size, pop_size)
-            
-            F = np.random.uniform(mut_min, mut_max, (pop_size, 1))
-            mutant = pop[best_idx] + F * (pop[r1] - pop[r2])
-            
-            cross_points = np.random.rand(pop_size, K) < DE_RECOMBINATION
-            force_idx = np.random.randint(0, K, pop_size)
-            cross_points[np.arange(pop_size), force_idx] = True
-            
-            trial = np.where(cross_points, mutant, pop)
-            trial = np.clip(trial, bnd_min, bnd_max)
-            
-            trial_fitness = eval_pop(trial)
-            
-            improved = trial_fitness < fitness
-            pop[improved] = trial[improved]
-            fitness[improved] = trial_fitness[improved]
-            
-            curr_best_idx = np.argmin(fitness)
-            if fitness[curr_best_idx] < best_cost:
-                best_cost = fitness[curr_best_idx]
-                best_idx = curr_best_idx
-                
-            convergence_curve.append(best_cost)
-            
-        best_x = pop[best_idx]
-        
-        # Polish step (facultatif mais identique au polish de Scipy)
-        def single_obj(x):
-            w = params_to_weights(x, max_weight=max_weight)
-            port_ret = X_sel @ w
-            std_diff = np.std(port_ret - y_train)
-            penalty = 0.0
-            if target_beta is not None and var_y > 0:
-                cov = np.cov(port_ret, y_train)[0, 1]
-                beta = cov / var_y
-                penalty += 10.0 * (beta - target_beta)**2
-            return std_diff + penalty
-            
-        res_min = minimize(single_obj, best_x, bounds=[(bnd_min, bnd_max)]*K, method='L-BFGS-B', tol=DE_TOL)
-        if res_min.success and res_min.fun < best_cost:
-            best_x = res_min.x
-            best_cost = res_min.fun
-            if convergence_curve:
-                convergence_curve[-1] = best_cost
+        rng = np.random.default_rng(seed_i)
 
-        if best_cost < best_fun:
-            best_fun = best_cost
-            best_w = params_to_weights(best_x, max_weight=max_weight)
+        pop = _build_de_initial_population(
+            X_sel,
+            y_train,
+            proxy_w=proxy_w,
+            pop_size=pop_size,
+            rng=rng,
+            bounds=(bnd_min, bnd_max),
+        )
+        fitness = _evaluate_param_population(X_sel, y_train, pop, target_beta=target_beta, max_weight=None)
+        best_idx = int(np.argmin(fitness))
+        restart_best_cost = float(fitness[best_idx])
+        convergence_curve = [restart_best_cost]
+
+        mu_f = float(np.clip(np.mean([mut_min, mut_max]), mut_min, mut_max))
+        mu_cr = float(np.clip(DE_RECOMBINATION, 0.0, 1.0))
+        no_improve = 0
+        iterations_run = 0
+
+        for it in range(DE_MAX_ITER):
+            iterations_run = it + 1
+            ordered_idx = np.argsort(fitness)
+            pbest_count = max(2, int(math.ceil(DE_PBEST_RATE * pop_size)))
+            pbest_pool = ordered_idx[:pbest_count]
+
+            F = np.clip(rng.normal(mu_f, 0.15, size=pop_size), mut_min, mut_max)
+            CR = np.clip(rng.normal(mu_cr, 0.10, size=pop_size), 0.0, 1.0)
+            trial = np.empty_like(pop)
+            population_idx = np.arange(pop_size)
+
+            for i in range(pop_size):
+                pbest_choices = pbest_pool[pbest_pool != i]
+                pbest_idx = int(rng.choice(pbest_choices if len(pbest_choices) > 0 else pbest_pool))
+
+                candidates = population_idx[(population_idx != i) & (population_idx != pbest_idx)]
+                if len(candidates) >= 2:
+                    r1, r2 = rng.choice(candidates, size=2, replace=False)
+                elif len(candidates) == 1:
+                    r1 = int(candidates[0])
+                    r2 = int(ordered_idx[-1]) if int(ordered_idx[-1]) not in (i, pbest_idx, r1) else int(ordered_idx[0])
+                else:
+                    r1 = int((i + 1) % pop_size)
+                    r2 = int((i + 2) % pop_size)
+
+                mutant = pop[i] + F[i] * (pop[pbest_idx] - pop[i]) + F[i] * (pop[r1] - pop[r2])
+                cross_points = rng.random(K) < CR[i]
+                cross_points[int(rng.integers(0, K))] = True
+                trial[i] = np.where(cross_points, mutant, pop[i])
+
+            trial = np.clip(trial, bnd_min, bnd_max)
+            trial_fitness = _evaluate_param_population(X_sel, y_train, trial, target_beta=target_beta, max_weight=None)
+
+            improved = trial_fitness < fitness
+            if np.any(improved):
+                success_f = F[improved]
+                success_cr = CR[improved]
+                mu_f = (1.0 - DE_ADAPT_RATE) * mu_f + DE_ADAPT_RATE * (np.sum(success_f ** 2) / max(np.sum(success_f), 1e-12))
+                mu_cr = (1.0 - DE_ADAPT_RATE) * mu_cr + DE_ADAPT_RATE * float(np.mean(success_cr))
+                pop[improved] = trial[improved]
+                fitness[improved] = trial_fitness[improved]
+
+            curr_best_idx = int(np.argmin(fitness))
+            curr_best_cost = float(fitness[curr_best_idx])
+            if curr_best_cost + plateau_tol < restart_best_cost:
+                restart_best_cost = curr_best_cost
+                best_idx = curr_best_idx
+                no_improve = 0
+            else:
+                no_improve += 1
+
+            convergence_curve.append(restart_best_cost)
+            if no_improve >= DE_EARLY_STOP:
+                break
+
+        candidate_w = params_to_weights(pop[best_idx], max_weight=None)
+        candidate_obj = evaluate_portfolio_objective(X_sel, y_train, candidate_w, target_beta=target_beta)
+
+        polish_starts = [candidate_w, proxy_w, equal_w]
+        polished_w, polish_info = optimize_weights_slsqp(
+            X_sel,
+            y_train,
+            target_beta=target_beta,
+            max_weight=None,
+            starts=polish_starts,
+            strategy_label='SLSQP simplex polish',
+        )
+        polished_obj = evaluate_portfolio_objective(X_sel, y_train, polished_w, target_beta=target_beta)
+        if polished_obj + plateau_tol < candidate_obj:
+            candidate_w = polished_w
+            candidate_obj = polished_obj
+            convergence_curve[-1] = candidate_obj
+
+        if restart == 0 or candidate_obj + plateau_tol < best_fun:
+            best_fun = candidate_obj
+            best_w = candidate_w
             convergence_best = list(convergence_curve)
             best_info = {
-                'best_restart': restart, 'seed': seed_i,
-                'converged': True, 'message': 'Custom Vectorized DE converged',
-                'n_iterations': DE_MAX_ITER, 'n_fev': DE_MAX_ITER * pop_size,
+                'best_restart': restart,
+                'seed': seed_i,
+                'converged': True,
+                'message': (
+                    'Adaptive current-to-pbest/1/bin converged'
+                    if no_improve < DE_EARLY_STOP
+                    else f'Adaptive current-to-pbest/1/bin stopped after {iterations_run} iterations (plateau)'
+                ),
+                'n_iterations': iterations_run + int(polish_info.get('n_iterations', 0)),
+                'n_fev': pop_size * (iterations_run + 1) + int(polish_info.get('n_fev', 0)),
             }
 
     elapsed = time.time() - t0_global
     de_info = {
         'n_restarts': DE_N_RESTARTS, 'popsize': pop_size,
-        'maxiter': DE_MAX_ITER, 'strategy': 'Custom Vectorized Numpy DE',
-        'mutation': str(DE_MUTATION), 'recombination': DE_RECOMBINATION,
-        'tolerance': DE_TOL, 'bounds': '(-6.0, 6.0)',
+        'maxiter': DE_MAX_ITER, 'strategy': 'Adaptive current-to-pbest/1/bin + SLSQP polish',
+        'mutation': 'adaptive F in [%.2f, %.2f]' % (mut_min, mut_max), 'recombination': 'adaptive around %.2f' % DE_RECOMBINATION,
+        'tolerance': DE_TOL, 'bounds': f'({bnd_min:.1f}, {bnd_max:.1f}) logits',
         'polish': True, 'elapsed': elapsed,
         'obj_value': best_fun, **best_info,
         'convergence_curve': convergence_best,
@@ -946,9 +1128,6 @@ def run_rolling(data, K=None, selected_indices=None, selection_method='lasso', w
     hyper_records, convergence_records = [], []
     all_port_returns, all_idx_returns = [], []
 
-    prev_weights = None
-    prev_sel_idx = None
-    rebal_count  = 0
     cursor = train_days
 
     # Count total rebalancings for progress
@@ -1143,8 +1322,6 @@ def run_rolling(data, K=None, selected_indices=None, selection_method='lasso', w
                 'Iteration': step + 1, 'Obj Value': val,
             })
 
-        prev_weights = weights.copy()
-        prev_sel_idx = sel_idx.copy()
         cursor += rebal_days
 
     if executed_count == 0:

@@ -3,7 +3,7 @@ from calendar import monthrange
 
 import pandas as pd
 
-from .config import FIXED_UNDERLYING_NAME, current_valuation_date_str
+from .config import FIXED_UNDERLYING_NAME, NEAR_EXPIRY_DAYS, current_valuation_date_str
 
 MONTH_CODES = {
     1: "JAN",
@@ -148,4 +148,25 @@ def clear_contract_overrides(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     contracts = dataframe.copy() if dataframe is not None else pd.DataFrame()
     for column in GLOBAL_PARAMETER_COLUMNS:
         contracts[column] = pd.NA
+    return contracts
+
+
+def prepare_contracts_for_valuation(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+    contracts = dataframe.copy() if dataframe is not None else pd.DataFrame()
+    if contracts.empty:
+        return contracts
+
+    valuation_date = pd.to_datetime(current_valuation_date_str(), errors="coerce")
+    expiry_dates = pd.to_datetime(contracts.get("expiry_date"), errors="coerce").dt.normalize()
+
+    contracts["expiry_date_parsed"] = expiry_dates
+    contracts["days_to_expiry"] = (expiry_dates - valuation_date).dt.days
+    contracts["settlement_price_points"] = pd.to_numeric(contracts.get("settlement_price_points"), errors="coerce")
+    contracts["mtm_price"] = contracts["settlement_price_points"]
+    contracts["mtm_source"] = "missing"
+    contracts.loc[contracts["mtm_price"].notna(), "mtm_source"] = "contract"
+
+    contracts["expiry_alert"] = "OK"
+    contracts.loc[contracts["days_to_expiry"].lt(0), "expiry_alert"] = "Expired"
+    contracts.loc[contracts["days_to_expiry"].between(0, NEAR_EXPIRY_DAYS), "expiry_alert"] = "Near expiry"
     return contracts

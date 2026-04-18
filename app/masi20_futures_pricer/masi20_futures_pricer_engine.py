@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 import io
-import os
 import re
 import unicodedata
 from typing import Mapping, Optional
@@ -14,41 +13,8 @@ from typing import Mapping, Optional
 import numpy as np
 import pandas as pd
 
-
 # ============================================================================
-# 1. CHARGEMENT DES POIDS
-# ============================================================================
-
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-FACTEUR_FILE = os.path.join(APP_DIR, "Flottant_plafonnements_masi20.xlsx")
-
-
-def load_index_weights(year_label: str = "2025-2026") -> pd.DataFrame:
-    """
-    Charge les poids reels des titres dans l'indice MASI 20.
-    """
-    df = pd.read_excel(FACTEUR_FILE)
-    year_col = [c for c in df.columns if "Ann" in str(c) or "ann" in str(c)][0]
-    df = df.rename(columns={year_col: "Annee"})
-
-    df_year = df[df["Annee"] == year_label].copy()
-    if df_year.empty:
-        raise ValueError(f"Annee '{year_label}' non trouvee.")
-
-    df_year = df_year.reset_index(drop=True)
-    df_year["Ticker_Short"] = df_year["Valeur"].str.replace(" MC Equity", "", regex=False)
-    return df_year[["Valeur", "Ticker_Short", "Flottant", "Plafonnement"]].copy()
-
-
-def get_available_years() -> list:
-    """Retourne les annees disponibles dans le fichier de facteurs."""
-    df = pd.read_excel(FACTEUR_FILE)
-    year_col = [c for c in df.columns if "Ann" in str(c) or "ann" in str(c)][0]
-    return sorted(df[year_col].dropna().unique().tolist())
-
-
-# ============================================================================
-# 2. COURBE DES TAUX SANS RISQUE
+# 1. COURBE DES TAUX SANS RISQUE
 # ============================================================================
 
 MONEY_MARKET_BASIS = "money_market"
@@ -404,8 +370,6 @@ def read_market_rate_csv(file_content: str) -> pd.DataFrame:
     maturity_col = _find_column(raw_df.columns.tolist(), "date", "echeance")
     rate_col = _find_column(raw_df.columns.tolist(), "taux", "moyen")
     value_col = _find_column(raw_df.columns.tolist(), "date", "valeur")
-    transaction_col = _find_column(raw_df.columns.tolist(), "transaction")
-
     missing_columns = []
     if maturity_col is None:
         missing_columns.append("Date d'echeance")
@@ -473,13 +437,6 @@ def read_market_rate_csv(file_content: str) -> pd.DataFrame:
             issues.append(f"Ligne {csv_line_number}: {exc}")
             continue
 
-        transaction_amount = np.nan
-        if transaction_col is not None:
-            try:
-                transaction_amount = _parse_localized_number(row[transaction_col], percent=False)
-            except Exception:
-                transaction_amount = np.nan
-
         records.append(
             {
                 "Maturity Date": maturity_date,
@@ -489,7 +446,6 @@ def read_market_rate_csv(file_content: str) -> pd.DataFrame:
                 "Market Rate (%)": market_rate * 100.0,
                 "Source Basis": basis_label(source_basis),
                 "Source Basis Code": source_basis,
-                "Transaction": transaction_amount,
             }
         )
 
@@ -583,17 +539,6 @@ def ensure_risk_free_curve(
     raise TypeError("Le format de courbe des taux n'est pas supporte.")
 
 
-def format_maturity_label(days_to_maturity: int) -> str:
-    days = int(days_to_maturity)
-    if days >= 365 and days % 365 == 0:
-        years = days // 365
-        return f"{years} an" if years == 1 else f"{years} ans"
-    if days >= 30 and days % 30 == 0:
-        months = days // 30
-        return f"{months} mois"
-    return f"{days} j"
-
-
 def build_yield_curve_df(
     yield_curve: Optional[object] = None,
     target_maturity: Optional[float] = None,
@@ -616,7 +561,6 @@ def build_yield_curve_df(
                 "Date de valeur": pillar.value_date,
                 "Date d'echeance": pillar.maturity_date,
                 "Maturite courbe (jours)": effective_days,
-                "Label": format_maturity_label(effective_days),
                 "Convention cible": basis_label_for_days(
                     effective_days if target_maturity is None else target_maturity
                 ),
@@ -680,7 +624,8 @@ def compute_dividend_yield(
     stock_prices: dict,
     dividends: dict,
     weights: dict = None,
-) -> tuple:
+    include_details: bool = True,
+) -> tuple[float, pd.DataFrame]:
     """
     Calcule le taux de dividende pondere de l'indice MASI 20.
     Div Yield = Somme((Di / Ci) x pi)
@@ -700,7 +645,7 @@ def compute_dividend_yield(
     if total_weight == 0:
         return 0.0, pd.DataFrame()
 
-    records = []
+    records = [] if include_details else None
     div_yield_total = 0.0
 
     for ticker in tickers:
@@ -714,21 +659,23 @@ def compute_dividend_yield(
             div_yield_i = 0.0
 
         div_yield_total += div_yield_i
-        records.append(
-            {
-                "Ticker": ticker,
-                "Cours (Ci)": current_price,
-                "Dividende (Di)": dividend,
-                "Di/Ci (%)": (dividend / current_price * 100.0)
-                if current_price is not None and current_price > 0 and dividend is not None
-                else 0.0,
-                "Poids (pi)": normalized_weight,
-                "Contribution (%)": div_yield_i * 100.0,
-                "Donnees completes": current_price is not None and current_price > 0 and dividend is not None,
-            }
-        )
+        if include_details and records is not None:
+            records.append(
+                {
+                    "Ticker": ticker,
+                    "Cours (Ci)": current_price,
+                    "Dividende (Di)": dividend,
+                    "Di/Ci (%)": (dividend / current_price * 100.0)
+                    if current_price is not None and current_price > 0 and dividend is not None
+                    else 0.0,
+                    "Poids (pi)": normalized_weight,
+                    "Contribution (%)": div_yield_i * 100.0,
+                    "Donnees completes": current_price is not None and current_price > 0 and dividend is not None,
+                }
+            )
 
-    return div_yield_total, pd.DataFrame(records)
+    details_df = pd.DataFrame(records) if include_details and records is not None else pd.DataFrame()
+    return div_yield_total, details_df
 
 
 # ============================================================================
@@ -742,6 +689,7 @@ def price_future(
     dividend_yield: float,
     days_to_maturity: int,
     risk_free_basis: Optional[str] = None,
+    include_breakdown: bool = True,
 ) -> dict:
     """
     Calcule le cours theorique du contrat a terme sur l'indice MASI 20.
@@ -750,7 +698,6 @@ def price_future(
         raise ValueError("Le spot ne peut pas etre negatif.")
 
     validated_days = _validate_days(days_to_maturity, allow_zero=True)
-    risk_free_basis_to_use = risk_free_basis or rate_basis_for_days(validated_days)
     risk_free_rate_curve = float(risk_free_rate)
     # Le pricer utilise directement le taux issu de la courbe, sans
     # reconversion vers un taux continu equivalent.
@@ -760,27 +707,37 @@ def price_future(
     cost_of_carry = risk_free_rate_pricing - float(dividend_yield)
     carry_factor = float(np.exp(cost_of_carry * t))
     future_price = float(spot) * carry_factor
+    result = {
+        "spot": float(spot),
+        "future_price": future_price,
+        "risk_free_rate_pricing": risk_free_rate_pricing,
+        "dividend_yield": float(dividend_yield),
+        "days_to_maturity": int(validated_days),
+    }
+
+    if not include_breakdown:
+        return result
+
+    risk_free_basis_to_use = risk_free_basis or rate_basis_for_days(validated_days)
     basis = future_price - float(spot)
     basis_pct = (basis / float(spot)) * 100.0 if spot > 0 else 0.0
     fair_value = float(spot) * (carry_factor - 1.0)
 
-    return {
-        "spot": float(spot),
-        "future_price": future_price,
-        "risk_free_rate_market": risk_free_rate_curve,
-        "risk_free_rate_curve": risk_free_rate_curve,
-        "risk_free_rate_pricing": risk_free_rate_pricing,
-        "risk_free_basis": basis_label(risk_free_basis_to_use),
-        "dividend_yield": float(dividend_yield),
-        "cost_of_carry": cost_of_carry,
-        "days_to_maturity": int(validated_days),
-        "t_fraction": t,
-        "basis": basis,
-        "basis_pct": basis_pct,
-        "fair_value_spread": fair_value,
-        "carry_factor": carry_factor,
-        "rate_basis": basis_label_for_days(validated_days),
-    }
+    result.update(
+        {
+            "risk_free_rate_market": risk_free_rate_curve,
+            "risk_free_rate_curve": risk_free_rate_curve,
+            "risk_free_basis": basis_label(risk_free_basis_to_use),
+            "cost_of_carry": cost_of_carry,
+            "t_fraction": t,
+            "basis": basis,
+            "basis_pct": basis_pct,
+            "fair_value_spread": fair_value,
+            "carry_factor": carry_factor,
+            "rate_basis": basis_label_for_days(validated_days),
+        }
+    )
+    return result
 
 
 def generate_term_structure(
@@ -816,6 +773,7 @@ def generate_term_structure(
             dividend_yield,
             days,
             risk_free_basis=rate_basis,
+            include_breakdown=True,
         )
         records.append(
             {
@@ -831,13 +789,23 @@ def generate_term_structure(
     return pd.DataFrame(records)
 
 
-def _last_friday_of_month(year: int, month: int) -> datetime:
+def _friday_before_last_friday_of_month(year: int, month: int) -> datetime:
     friday_dates = [
         week[calendar.FRIDAY]
         for week in calendar.monthcalendar(year, month)
         if week[calendar.FRIDAY] != 0
     ]
-    return datetime(year, month, friday_dates[-1])
+    if len(friday_dates) < 2:
+        raise ValueError(
+            f"Impossible de trouver le vendredi precedant le dernier vendredi pour {month:02d}/{year}."
+        )
+    return datetime(year, month, friday_dates[-2])
+
+
+def _third_friday_of_month(year: int, month: int) -> datetime:
+    # Compatibilite ascendante: l'echeance retenue est desormais
+    # le vendredi precedant le dernier vendredi du mois.
+    return _friday_before_last_friday_of_month(year, month)
 
 
 def generate_maturity_schedule(
@@ -861,7 +829,7 @@ def generate_maturity_schedule(
 
     while True:
         for month in maturity_months:
-            maturity_date = _last_friday_of_month(current_year, month)
+            maturity_date = _friday_before_last_friday_of_month(current_year, month)
             days_to = (maturity_date - reference_date).days
             if days_to > 0:
                 ticker = f"FMASI20{month_codes[month]}{str(current_year)[-2:]}"
@@ -879,6 +847,7 @@ def generate_maturity_schedule(
 def compute_index_weights_from_caps(
     df_weights: pd.DataFrame,
     market_caps: dict,
+    include_details: bool = True,
 ) -> tuple[dict, pd.DataFrame]:
     """
     Calcule les poids de l'indice a partir des capitalisations flottantes plafonnees.
@@ -898,7 +867,7 @@ def compute_index_weights_from_caps(
         return factor / 100.0 if factor > 1.0 else factor
 
     caps = {}
-    records = []
+    records = [] if include_details else None
     missing_market_caps = []
 
     for _, row in df_weights.iterrows():
@@ -911,19 +880,20 @@ def compute_index_weights_from_caps(
             missing_market_caps.append(ticker)
         adjusted_cap = market_cap * free_float * cap_factor if market_cap > 0 else 0.0
         caps[ticker] = adjusted_cap
-        records.append(
-            {
-                "Ticker": ticker,
-                "Capitalisation brute": market_cap,
-                "Flottant": free_float,
-                "Plafonnement": cap_factor,
-                "Capitalisation ajustee": adjusted_cap,
-                "Capitalisation disponible": market_cap > 0,
-            }
-        )
+        if include_details and records is not None:
+            records.append(
+                {
+                    "Ticker": ticker,
+                    "Capitalisation brute": market_cap,
+                    "Flottant": free_float,
+                    "Plafonnement": cap_factor,
+                    "Capitalisation ajustee": adjusted_cap,
+                    "Capitalisation disponible": market_cap > 0,
+                }
+            )
 
     total_cap = sum(caps.values())
-    details_df = pd.DataFrame(records)
+    details_df = pd.DataFrame(records) if include_details and records is not None else pd.DataFrame()
 
     if missing_market_caps:
         if not details_df.empty:
@@ -964,7 +934,13 @@ def sensitivity_analysis(
             shifted_spot = spot * (1 + spot_shift / 100.0)
             shifted_rate = risk_free_rate + rate_shift / 10000.0
             try:
-                result = price_future(shifted_spot, shifted_rate, dividend_yield, days_to_maturity)
+                result = price_future(
+                    shifted_spot,
+                    shifted_rate,
+                    dividend_yield,
+                    days_to_maturity,
+                    include_breakdown=False,
+                )
                 column_values.append(result["future_price"])
             except ValueError:
                 column_values.append(np.nan)

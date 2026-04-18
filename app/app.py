@@ -304,5 +304,5 @@ def main() -> None:
 
     render_home()
 
-
-main()
+if __name__ == "__main__":
+    main()

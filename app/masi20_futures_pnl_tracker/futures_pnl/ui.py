@@ -1,5 +1,3 @@
-from collections.abc import Callable
-from datetime import date, datetime
 from html import escape
 from pathlib import Path
 
@@ -17,7 +15,7 @@ from .analytics import (
     compute_global_metrics,
 )
 from .config import APP_TITLE, CONTRACT_COLUMNS, TRANSACTION_COLUMNS
-from .pricing import compute_theoretical_prices
+from .contracts import prepare_contracts_for_valuation
 from .storage import ensure_storage, load_contracts, load_settings, load_transactions, reset_storage
 from .validators import validate_contracts, validate_transactions
 
@@ -447,228 +445,6 @@ def render_metric_cards(cards: list[dict], columns: int = 4) -> None:
                 )
 
 
-def glow_from_value(value: object, positive: str = "green", negative: str = "red", neutral: str = "blue") -> str:
-    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(numeric_value):
-        return neutral
-    if float(numeric_value) > 0:
-        return positive
-    if float(numeric_value) < 0:
-        return negative
-    return neutral
-
-
-def _format_value_for_card(value: object, column: str) -> str:
-    if column in BOOLEAN_COLUMNS or isinstance(value, (bool, np.bool_)):
-        return _display_bool(value)
-    if pd.isna(value):
-        return "-"
-    if column in VALUE_LABELS:
-        return format_choice_value(column, value)
-    if isinstance(value, (pd.Timestamp, datetime, date)):
-        return pd.Timestamp(value).strftime("%d/%m/%Y")
-
-    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.notna(numeric_value):
-        numeric_value = float(numeric_value)
-        if column in MONEY_COLUMNS:
-            return f"{numeric_value:,.2f} MAD"
-        if column in POINT_COLUMNS:
-            return f"{numeric_value:,.4f}"
-        if column in RATIO_COLUMNS:
-            return f"{numeric_value:,.2f}x" if column == "leverage" else f"{numeric_value:,.2f}"
-        if column in QUANTITY_COLUMNS:
-            return f"{numeric_value:,.2f}" if not numeric_value.is_integer() else f"{int(numeric_value):,}"
-    return str(value)
-
-
-def _detail_tone(value: object, column: str) -> str:
-    if pd.isna(value):
-        return "muted"
-
-    if column in MONEY_COLUMNS | POINT_COLUMNS | RATIO_COLUMNS:
-        numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-        if pd.notna(numeric_value):
-            if float(numeric_value) > 0:
-                return "positive"
-            if float(numeric_value) < 0:
-                return "negative"
-            return "neutral"
-
-    if column in POSITIVE_FLAG_COLUMNS:
-        return "positive" if bool(value) else "neutral"
-    if column in NEGATIVE_FLAG_COLUMNS:
-        return "negative" if bool(value) else "neutral"
-
-    if column == "severity":
-        return {
-            "error": "negative",
-            "warning": "warning",
-            "info": "info",
-            "success": "positive",
-        }.get(str(value).strip().lower(), "neutral")
-
-    if column in {"side_lp", "side_label"}:
-        return {
-            "BUY": "info",
-            "SELL": "negative",
-            "LONG": "positive",
-            "SHORT": "negative",
-            "FLAT": "neutral",
-        }.get(str(value).strip().upper(), "neutral")
-
-    if column == "status":
-        tone = str(value).strip().upper()
-        if tone in {"CONFIRMED", "CONFIRME", "CONFIRMED_OK", "FILLED", "DONE", "PARTIAL", "PARTIEL"}:
-            return "positive"
-        if tone in {"PENDING", "ATTENTE"}:
-            return "warning"
-        if tone in {"REJECTED", "REJETE", "CANCELLED", "CANCELED", "ANNULE", "ANNULEE"}:
-            return "negative"
-        return "neutral"
-
-    if column == "expiry_alert":
-        return {
-            "Expired": "negative",
-            "Near expiry": "warning",
-            "OK": "positive",
-        }.get(str(value).strip(), "neutral")
-
-    if column == "mtm_source":
-        return {
-            "contract": "warning",
-            "missing": "muted",
-        }.get(str(value).strip().lower(), "neutral")
-
-    return "default"
-
-
-def _detail_badge_html(label: str, tone: str = "neutral") -> str:
-    if not label or label == "-":
-        return ""
-    return f'<span class="detail-badge detail-badge-{escape(tone)}">{escape(label)}</span>'
-
-
-def _detail_card_html(
-    title: str,
-    items: list[dict[str, str]],
-    *,
-    subtitle: str = "",
-    glow: str = "gold",
-    badge: str = "",
-    badge_tone: str = "neutral",
-) -> str:
-    subtitle_html = f'<div class="detail-card-subtitle">{escape(subtitle)}</div>' if subtitle and subtitle != "-" else ""
-    badge_html = _detail_badge_html(badge, badge_tone)
-    rows_html = "".join(
-        f'<div class="detail-card-row">'
-        f'<span class="detail-card-label">{escape(item["label"])}</span>'
-        f'<span class="detail-card-value detail-card-value-{escape(item["tone"])}">{escape(item["value"])}</span>'
-        f"</div>"
-        for item in items
-    )
-    return (
-        f'<div class="detail-card">'
-        f'<div class="glow glow-{escape(glow)}"></div>'
-        f'<div class="detail-card-head">'
-        f"<div>"
-        f'<div class="detail-card-title">{escape(title)}</div>'
-        f"{subtitle_html}"
-        f"</div>"
-        f"{badge_html}"
-        f"</div>"
-        f'<div class="detail-card-body">{rows_html}</div>'
-        f"</div>"
-    )
-
-
-def render_detail_cards(cards: list[dict], columns: int = 3) -> None:
-    if not cards:
-        return
-    columns = max(1, columns)
-    for start in range(0, len(cards), columns):
-        row_cards = cards[start : start + columns]
-        row = st.columns(len(row_cards))
-        for column, card in zip(row, row_cards):
-            with column:
-                st.markdown(
-                    _detail_card_html(
-                        title=str(card.get("title", "")),
-                        subtitle=str(card.get("subtitle", "")),
-                        items=card.get("items", []),
-                        glow=str(card.get("glow", "gold")),
-                        badge=str(card.get("badge", "")),
-                        badge_tone=str(card.get("badge_tone", "neutral")),
-                    ),
-                    unsafe_allow_html=True,
-                )
-
-
-def render_record_cards(
-    dataframe: pd.DataFrame,
-    *,
-    title_column: str,
-    body_columns: list[str],
-    subtitle_column: str | None = None,
-    badge_column: str | None = None,
-    label_overrides: dict[str, str] | None = None,
-    columns: int = 3,
-    glow: str = "gold",
-    title_builder: Callable[[pd.Series], str] | None = None,
-    subtitle_builder: Callable[[pd.Series], str] | None = None,
-    badge_builder: Callable[[pd.Series], str] | None = None,
-    glow_builder: Callable[[pd.Series], str] | None = None,
-) -> None:
-    if dataframe.empty:
-        return
-
-    cards: list[dict] = []
-    for _, row in dataframe.iterrows():
-        title_value = (
-            title_builder(row)
-            if title_builder is not None
-            else _format_value_for_card(row.get(title_column), title_column)
-        )
-        subtitle_value = ""
-        if subtitle_builder is not None:
-            subtitle_value = subtitle_builder(row)
-        elif subtitle_column and subtitle_column in dataframe.columns:
-            subtitle_value = _format_value_for_card(row.get(subtitle_column), subtitle_column)
-
-        badge_value = ""
-        badge_tone = "neutral"
-        if badge_builder is not None:
-            badge_value = badge_builder(row)
-        elif badge_column and badge_column in dataframe.columns:
-            badge_value = _format_value_for_card(row.get(badge_column), badge_column)
-            badge_tone = _detail_tone(row.get(badge_column), badge_column)
-
-        items: list[dict[str, str]] = []
-        for column_name in body_columns:
-            if column_name not in dataframe.columns:
-                continue
-            items.append(
-                {
-                    "label": resolved_label(column_name, label_overrides),
-                    "value": _format_value_for_card(row.get(column_name), column_name),
-                    "tone": _detail_tone(row.get(column_name), column_name),
-                }
-            )
-
-        cards.append(
-            {
-                "title": title_value,
-                "subtitle": subtitle_value,
-                "badge": badge_value,
-                "badge_tone": badge_tone,
-                "glow": glow_builder(row) if glow_builder is not None else glow,
-                "items": items,
-            }
-        )
-
-    render_detail_cards(cards, columns=columns)
-
-
 def _badge_html(label: str, badge_class: str = "") -> str:
     klass = f"hero-badge {badge_class}".strip()
     return f'<span class="{escape(klass)}">{escape(label)}</span>'
@@ -886,19 +662,6 @@ def append_dataframe_rows(
 
     return pd.concat([existing, incoming], ignore_index=True)
 
-
-@st.cache_data(show_spinner=False)
-def project_tree_text() -> str:
-    root = Path(__file__).resolve().parents[1]
-    lines: list[str] = []
-    for path in sorted(root.rglob("*")):
-        if ".venv" in path.parts or "__pycache__" in path.parts:
-            continue
-        relative = path.relative_to(root)
-        lines.append(str(relative))
-    return "\n".join(lines)
-
-
 def load_app_state() -> dict:
     ensure_storage()
     settings = load_settings()
@@ -907,16 +670,16 @@ def load_app_state() -> dict:
     transactions_raw = load_transactions()
 
     contracts_validated, contract_issues = validate_contracts(contracts_raw, settings)
-    contracts_priced = compute_theoretical_prices(contracts_validated, settings)
-    transactions_validated, transaction_issues = validate_transactions(transactions_raw, contracts_priced)
-    contract_metrics = compute_contract_metrics(contracts_priced, transactions_validated, settings)
+    contracts_ready = prepare_contracts_for_valuation(contracts_validated)
+    transactions_validated, transaction_issues = validate_transactions(transactions_raw, contracts_ready)
+    contract_metrics = compute_contract_metrics(contracts_ready, transactions_validated, settings)
     confirmed_positions = compute_confirmed_positions(transactions_validated, contract_metrics)
     cmp_detail, cmp_summary = compute_cmp_sequential(transactions_validated, contract_metrics)
     cmp_portfolio = build_cmp_portfolio_view(contract_metrics, cmp_summary)
     global_metrics = compute_global_metrics(contract_metrics)
     cmp_global_metrics = compute_cmp_global_metrics(cmp_portfolio)
     alerts = build_dashboard_alerts(
-        contracts_priced,
+        contracts_ready,
         contract_issues,
         transactions_validated,
         transaction_issues,
@@ -928,7 +691,7 @@ def load_app_state() -> dict:
         "contracts_raw": contracts_raw,
         "transactions_raw": transactions_raw,
         "contracts_validated": contracts_validated,
-        "contracts_priced": contracts_priced,
+        "contracts_ready": contracts_ready,
         "contract_issues": contract_issues,
         "transactions_validated": transactions_validated,
         "transaction_issues": transaction_issues,
