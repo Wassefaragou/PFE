@@ -13,6 +13,11 @@ from typing import Mapping, Optional
 import numpy as np
 import pandas as pd
 
+try:
+    import holidays as holidays_lib
+except Exception:  # pragma: no cover - optional dependency
+    holidays_lib = None
+
 # ============================================================================
 # 1. COURBE DES TAUX SANS RISQUE
 # ============================================================================
@@ -22,6 +27,7 @@ ACTUARIAL_BASIS = "actuarial"
 SHORT_TERM_CUTOFF_DAYS = 365
 MONEY_MARKET_DAY_COUNT = 360.0
 ACTUARIAL_DAY_COUNT = 365.0
+HOLIDAY_PERIOD_COLUMNS = ["start_date", "end_date", "label", "source"]
 
 
 @dataclass(frozen=True)
@@ -789,6 +795,187 @@ def generate_term_structure(
     return pd.DataFrame(records)
 
 
+def empty_holiday_periods_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=HOLIDAY_PERIOD_COLUMNS)
+
+
+def parse_holiday_periods_table(source_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if source_df is None or source_df.empty:
+        return empty_holiday_periods_df()
+
+    start_col = (
+        _find_column(source_df.columns.tolist(), "start", "date")
+        or _find_column(source_df.columns.tolist(), "date", "debut")
+        or _find_column(source_df.columns.tolist(), "debut")
+    )
+    end_col = (
+        _find_column(source_df.columns.tolist(), "end", "date")
+        or _find_column(source_df.columns.tolist(), "date", "fin")
+        or _find_column(source_df.columns.tolist(), "fin")
+    )
+    label_col = (
+        _find_column(source_df.columns.tolist(), "label")
+        or _find_column(source_df.columns.tolist(), "holiday", "name")
+        or _find_column(source_df.columns.tolist(), "nom")
+        or _find_column(source_df.columns.tolist(), "libelle")
+    )
+    source_col = _find_column(source_df.columns.tolist(), "source")
+
+    if start_col is None or end_col is None:
+        raise ValueError("Le calendrier holidays doit contenir au minimum les colonnes start_date et end_date.")
+
+    issues: list[str] = []
+    records: list[dict[str, object]] = []
+
+    for row_idx, row in source_df.iterrows():
+        raw_start = row[start_col]
+        raw_end = row[end_col]
+
+        if (
+            (pd.isna(raw_start) or str(raw_start).strip() == "")
+            and (pd.isna(raw_end) or str(raw_end).strip() == "")
+        ):
+            continue
+
+        start_date = pd.to_datetime(raw_start, errors="coerce")
+        end_date = pd.to_datetime(raw_end, errors="coerce")
+        if pd.isna(start_date) or pd.isna(end_date):
+            issues.append(
+                f"Ligne {row_idx + 2}: start_date/end_date invalide ({raw_start} / {raw_end})."
+            )
+            continue
+
+        start_date = pd.Timestamp(start_date).normalize()
+        end_date = pd.Timestamp(end_date).normalize()
+        if end_date < start_date:
+            issues.append(
+                f"Ligne {row_idx + 2}: end_date doit etre superieure ou egale a start_date."
+            )
+            continue
+
+        label = ""
+        if label_col is not None and pd.notna(row[label_col]):
+            label = str(row[label_col]).strip()
+
+        source_name = ""
+        if source_col is not None and pd.notna(row[source_col]):
+            source_name = str(row[source_col]).strip()
+
+        records.append(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "label": label,
+                "source": source_name,
+            }
+        )
+
+    periods_df = pd.DataFrame(records, columns=HOLIDAY_PERIOD_COLUMNS)
+    if not periods_df.empty:
+        periods_df = (
+            periods_df
+            .sort_values(by=["start_date", "end_date", "label", "source"])
+            .drop_duplicates(subset=["start_date", "end_date", "label", "source"])
+            .reset_index(drop=True)
+        )
+
+    periods_df.attrs["warnings"] = issues
+    return periods_df
+
+
+def build_holiday_periods_from_library(
+    start_year: int,
+    end_year: int,
+    country_code: str = "MA",
+    observed: bool = True,
+    language: str = "fr",
+) -> pd.DataFrame:
+    if holidays_lib is None:
+        raise ImportError(
+            "La librairie 'holidays' n'est pas installee. Ajoutez-la a l'environnement pour activer le mode automatique."
+        )
+
+    if end_year < start_year:
+        raise ValueError("end_year doit etre superieur ou egal a start_year.")
+
+    holiday_map = holidays_lib.country_holidays(
+        country_code,
+        years=range(int(start_year), int(end_year) + 1),
+        observed=observed,
+        language=language,
+    )
+
+    holiday_items = sorted(
+        (pd.Timestamp(holiday_date).normalize(), str(label))
+        for holiday_date, label in holiday_map.items()
+    )
+    if not holiday_items:
+        return empty_holiday_periods_df()
+
+    records: list[dict[str, object]] = []
+    block_start = holiday_items[0][0]
+    block_end = holiday_items[0][0]
+    block_labels = [holiday_items[0][1]]
+
+    for holiday_date, label in holiday_items[1:]:
+        if holiday_date <= block_end + pd.Timedelta(days=1):
+            block_end = holiday_date
+            block_labels.append(label)
+            continue
+
+        records.append(
+            {
+                "start_date": block_start,
+                "end_date": block_end,
+                "label": " | ".join(dict.fromkeys(block_labels)),
+                "source": f"holidays:{country_code}",
+            }
+        )
+        block_start = holiday_date
+        block_end = holiday_date
+        block_labels = [label]
+
+    records.append(
+        {
+            "start_date": block_start,
+            "end_date": block_end,
+            "label": " | ".join(dict.fromkeys(block_labels)),
+            "source": f"holidays:{country_code}",
+        }
+    )
+    return pd.DataFrame(records, columns=HOLIDAY_PERIOD_COLUMNS)
+
+
+def expand_holiday_periods_to_dates(holiday_periods_df: Optional[pd.DataFrame]) -> set[pd.Timestamp]:
+    periods_df = parse_holiday_periods_table(holiday_periods_df)
+    holiday_dates: set[pd.Timestamp] = set()
+
+    for row in periods_df.itertuples(index=False):
+        for holiday_date in pd.date_range(row.start_date, row.end_date, freq="D"):
+            holiday_dates.add(pd.Timestamp(holiday_date).normalize())
+
+    return holiday_dates
+
+
+def adjust_to_previous_business_day(
+    target_date: object,
+    holiday_periods_df: Optional[pd.DataFrame] = None,
+) -> dict[str, object]:
+    raw_date = pd.Timestamp(target_date).normalize()
+    holiday_dates = expand_holiday_periods_to_dates(holiday_periods_df)
+    adjusted_date = raw_date
+
+    while adjusted_date.weekday() >= 5 or adjusted_date in holiday_dates:
+        adjusted_date -= pd.Timedelta(days=1)
+
+    return {
+        "theoretical_date": raw_date.to_pydatetime(),
+        "adjusted_date": adjusted_date.to_pydatetime(),
+        "adjusted": adjusted_date != raw_date,
+        "rolled_days": int((raw_date - adjusted_date).days),
+    }
+
+
 def _friday_before_last_friday_of_month(year: int, month: int) -> datetime:
     friday_dates = [
         week[calendar.FRIDAY]
@@ -812,6 +999,7 @@ def generate_maturity_schedule(
     reference_date: datetime = None,
     year: int = None,
     contract_count: int = 4,
+    holiday_periods_df: Optional[pd.DataFrame] = None,
 ) -> list:
     """
     Genere les echeances trimestrielles des contrats futures MASI 20.
@@ -821,19 +1009,32 @@ def generate_maturity_schedule(
     if contract_count <= 0:
         return []
 
+    reference_timestamp = pd.Timestamp(reference_date).normalize()
     maturity_months = [3, 6, 9, 12]
     month_codes = {3: "MAR", 6: "JUI", 9: "SEP", 12: "DEC"}
+    parsed_holiday_periods = parse_holiday_periods_table(holiday_periods_df)
 
     maturities = []
     current_year = year if year is not None else reference_date.year
 
     while True:
         for month in maturity_months:
-            maturity_date = _friday_before_last_friday_of_month(current_year, month)
-            days_to = (maturity_date - reference_date).days
+            theoretical_date = _friday_before_last_friday_of_month(current_year, month)
+            adjustment = adjust_to_previous_business_day(theoretical_date, parsed_holiday_periods)
+            maturity_date = adjustment["adjusted_date"]
+            days_to = int((pd.Timestamp(maturity_date).normalize() - reference_timestamp).days)
             if days_to > 0:
                 ticker = f"FMASI20{month_codes[month]}{str(current_year)[-2:]}"
-                maturities.append({"label": ticker, "date": maturity_date, "days": days_to})
+                maturities.append(
+                    {
+                        "label": ticker,
+                        "date": maturity_date,
+                        "days": days_to,
+                        "theoretical_date": adjustment["theoretical_date"],
+                        "adjusted": adjustment["adjusted"],
+                        "rolled_days": adjustment["rolled_days"],
+                    }
+                )
                 if year is None and len(maturities) >= contract_count:
                     return maturities
 

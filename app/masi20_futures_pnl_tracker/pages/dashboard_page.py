@@ -155,7 +155,6 @@ render_section_header(
 if state["confirmed_positions"].empty:
     render_status_box("Aucune vue confirmee disponible.", kind="info")
 else:
-    render_status_box("Informatif uniquement. Cette vue ne remplace pas le P&L officiel.", kind="warning")
     render_data_table(
         state["confirmed_positions"].sort_values(["delta_vs_all", "contract_code"], ascending=[False, True]),
         [

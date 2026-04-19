@@ -11,6 +11,7 @@ from futures_pnl.storage import (
     save_transactions,
 )
 from futures_pnl.ui import (
+    format_expiry_month,
     get_empty_contracts,
     init_page,
     label_for,
@@ -74,6 +75,21 @@ def _sync_generated_tickers(previous_contracts, next_contracts) -> None:
         daily_prices["contract_code"] = daily_prices["contract_code"].replace(code_map)
         save_daily_prices(daily_prices)
 
+
+def _expiry_selection_label(value: object) -> str:
+    formatted_value = format_expiry_month(value)
+    return "" if formatted_value == "-" else formatted_value
+
+
+def _build_expiry_option_map(expiry_values: list[str]) -> dict[str, str]:
+    option_map = {"": ""}
+    for raw_value in expiry_values:
+        text = str(raw_value).strip()
+        if not text:
+            continue
+        option_map[_expiry_selection_label(text)] = text
+    return option_map
+
 render_hero(
     "Referentiel contrats",
     "Ajoutez, modifiez et supprimez les contrats suivis par le tracker.",
@@ -110,7 +126,7 @@ editor_columns = [
     "comments",
 ]
 editor_input = editor_source[editor_columns].copy()
-editor_input["expiry_date"] = editor_input["expiry_date"].fillna("").astype(str)
+editor_input["expiry_date"] = editor_input["expiry_date"].map(_expiry_selection_label)
 editor_input["comments"] = editor_input["comments"].fillna("").astype(str)
 editor_input["initial_margin_per_lot"] = pd.to_numeric(editor_input["initial_margin_per_lot"], errors="coerce")
 editor_input["settlement_price_points"] = pd.to_numeric(editor_input["settlement_price_points"], errors="coerce")
@@ -119,26 +135,20 @@ upcoming_contracts = upcoming_contract_schedule(reference_date=reference_date, c
 upcoming_expiry_dates = [contract["expiry_date"] for contract in upcoming_contracts]
 existing_expiry_dates = [
     value
-    for value in editor_input["expiry_date"].tolist()
+    for value in editor_source["expiry_date"].tolist()
     if isinstance(value, str) and value.strip() and value not in upcoming_expiry_dates
 ]
-expiry_options = [""] + upcoming_expiry_dates + sorted(set(existing_expiry_dates))
+expiry_option_map = _build_expiry_option_map(upcoming_expiry_dates + sorted(set(existing_expiry_dates)))
+expiry_options = list(expiry_option_map.keys())
 
 if upcoming_contracts:
     upcoming_contract_cards = []
     palette = ["blue", "purple", "gold", "green", "red"]
     for index, contract in enumerate(upcoming_contracts):
-        expiry_value = pd.to_datetime(contract["expiry_date"], errors="coerce")
-        expiry_label = (
-            expiry_value.strftime("%d/%m/%Y")
-            if pd.notna(expiry_value)
-            else str(contract["expiry_date"])
-        )
         upcoming_contract_cards.append(
             {
-                "label": expiry_label,
+                "label": _expiry_selection_label(contract["expiry_date"]),
                 "value": contract["contract_code"],
-                "unit": f"{int(contract['days_to_expiry'])}j",
                 "glow": palette[index % len(palette)],
             }
         )
@@ -170,7 +180,11 @@ edited_contracts = st.data_editor(
     },
 )
 
-editor_preview = clear_contract_overrides(enrich_contract_reference(edited_contracts, force_contract_code=True))
+editor_preview_input = edited_contracts.copy()
+editor_preview_input["expiry_date"] = editor_preview_input["expiry_date"].map(
+    lambda value: expiry_option_map.get(str(value).strip(), "")
+)
+editor_preview = clear_contract_overrides(enrich_contract_reference(editor_preview_input, force_contract_code=True))
 
 if st.button("Enregistrer le referentiel", width="stretch"):
     _sync_generated_tickers(contracts_raw, editor_preview)
@@ -191,7 +205,6 @@ display_columns = [
     "initial_margin_per_lot",
     "settlement_price_points",
     "effective_tick_value",
-    "days_to_expiry",
     "expiry_alert",
 ]
 if contracts_ready.empty:

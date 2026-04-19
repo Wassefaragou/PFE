@@ -22,14 +22,16 @@ except Exception:  # pragma: no cover - fallback for older Streamlit/bare mode
         return None
 
 from masi20_futures_pricer_engine import (
-    basis_label_for_days,
     build_flat_curve_from_manual_rate,
+    build_holiday_periods_from_library,
     build_market_curve_from_csv,
     build_yield_curve_df,
     compute_dividend_yield,
     compute_index_weights_from_caps,
+    empty_holiday_periods_df,
     generate_maturity_schedule,
     interpolate_rate,
+    parse_holiday_periods_table,
     price_future,
 )
 
@@ -134,6 +136,9 @@ def run():
     RATE_SOURCE_MANUAL = "Taux manuel"
     DEFAULT_MANUAL_RATE = 0.00
     EXPECTED_MASI20_TITLES = 20
+    HOLIDAY_SOURCE_MANUAL = "Manuel"
+    HOLIDAY_SOURCE_FILE = "Fichier CSV/XLSX"
+    HOLIDAY_SOURCE_AUTO = "Holidays automatique"
 
 
     def contract_price_card(
@@ -425,9 +430,39 @@ def run():
 
 
     def read_uploaded_table(uploaded_file) -> pd.DataFrame:
-        if uploaded_file.name.endswith(".csv"):
+        lower_name = uploaded_file.name.lower()
+        if lower_name.endswith(".csv"):
             return pd.read_csv(uploaded_file)
+        if lower_name.endswith(".xls"):
+            raise ValueError("Le format .xls n'est pas supporte dans cet environnement. Utilisez .xlsx ou .csv.")
         return pd.read_excel(uploaded_file)
+
+
+    def holiday_periods_for_editor(source_df: pd.DataFrame | None) -> pd.DataFrame:
+        holiday_df = source_df.copy() if isinstance(source_df, pd.DataFrame) else empty_holiday_periods_df()
+        for column in ["start_date", "end_date", "label", "source"]:
+            if column not in holiday_df.columns:
+                holiday_df[column] = ""
+        holiday_df = holiday_df[["start_date", "end_date", "label", "source"]].copy()
+        for date_col in ("start_date", "end_date"):
+            holiday_df[date_col] = pd.to_datetime(holiday_df[date_col], errors="coerce").dt.date
+        holiday_df["label"] = holiday_df["label"].fillna("").astype(str)
+        holiday_df["source"] = holiday_df["source"].fillna("").astype(str)
+        return holiday_df
+
+
+    def compute_holiday_year_range(reference_date, contract_count: int) -> tuple[int, int]:
+        year_span = max(1, (int(contract_count) + 3) // 4)
+        start_year = int(reference_date.year)
+        end_year = start_year + year_span
+        return start_year, end_year
+
+
+    def current_holiday_periods_state() -> tuple[pd.DataFrame, list[str]]:
+        raw_table = st.session_state.get("pricer_holiday_periods", empty_holiday_periods_df())
+        holiday_df = parse_holiday_periods_table(raw_table)
+        warnings = holiday_df.attrs.get("warnings", [])
+        return holiday_df, warnings
 
 
     def find_matching_column(columns: list[str], candidates: list[tuple[str, ...]]) -> str | None:
@@ -648,19 +683,31 @@ def run():
         return text
 
 
-    def build_upcoming_contracts(reference_date, contract_count: int) -> list[dict]:
+    def build_upcoming_contracts(
+        reference_date,
+        contract_count: int,
+        holiday_periods_df: pd.DataFrame | None = None,
+    ) -> list[dict]:
         raw_maturities = generate_maturity_schedule(
             datetime.combine(reference_date, datetime.min.time()),
             contract_count=contract_count,
+            holiday_periods_df=holiday_periods_df,
         )
         contracts = []
         for maturity in raw_maturities[:contract_count]:
             maturity_date = maturity["date"].date() if hasattr(maturity["date"], "date") else maturity["date"]
+            theoretical_date = maturity.get("theoretical_date", maturity["date"])
+            theoretical_date = (
+                theoretical_date.date() if hasattr(theoretical_date, "date") else theoretical_date
+            )
             contracts.append(
                 {
-                    "label": format_future_contract_code(maturity_date),
+                    "label": format_future_contract_code(theoretical_date),
                     "date": maturity_date,
-                    "days": max(0, int((maturity_date - reference_date).days)),
+                    "theoretical_date": theoretical_date,
+                    "days": max(0, int(maturity.get("days", (maturity_date - reference_date).days))),
+                    "adjusted": bool(maturity.get("adjusted", False)),
+                    "rolled_days": int(maturity.get("rolled_days", 0)),
                 }
             )
         return contracts
@@ -677,6 +724,10 @@ def run():
             st.session_state["pricer_spot_auto_value"] = None
         if "pricer_spot_auto_fetched_at" not in st.session_state:
             st.session_state["pricer_spot_auto_fetched_at"] = None
+        if "pricer_holiday_source" not in st.session_state:
+            st.session_state["pricer_holiday_source"] = HOLIDAY_SOURCE_MANUAL
+        if "pricer_holiday_periods" not in st.session_state:
+            st.session_state["pricer_holiday_periods"] = holiday_periods_for_editor(empty_holiday_periods_df())
 
         st.markdown(
             f"""
@@ -707,9 +758,7 @@ def run():
             spot_price, spot_error = parse_optional_localized_float(spot_input)
             if spot_error:
                 st.error(spot_error)
-            spot_source_caption = "Saisi manuellement dans la barre laterale"
         else:
-            st.caption(f"API : {MASI20_SPOT_API_URL}")
             if st.button("Fetch spot MASI20", key="fetch_spot_api", width="stretch"):
                 try:
                     auto_spot_value, auto_spot_fetched_at = fetch_masi20_spot()
@@ -733,11 +782,6 @@ def run():
                 disabled=True,
             )
             spot_price = float(auto_spot_value) if auto_spot_value is not None else float("nan")
-            spot_source_caption = (
-                "Recupere automatiquement via l'API Casablanca Bourse"
-                if auto_spot_value is not None
-                else "Cliquez sur le bouton de fetch pour recuperer le spot"
-            )
 
         st.markdown("---")
 
@@ -754,17 +798,96 @@ def run():
             format="%d",
             help="Selectionne autant de contrats trimestriels que necessaire apres la date de calcul.",
         ))
-        selected_contracts = build_upcoming_contracts(eval_date, multi_contract_count)
+        st.markdown("---")
+        st.markdown("##### Calendrier Holidays")
+
+        holiday_source = st.radio(
+            "Source du calendrier",
+            options=[HOLIDAY_SOURCE_MANUAL, HOLIDAY_SOURCE_FILE, HOLIDAY_SOURCE_AUTO],
+            key="pricer_holiday_source",
+            help="La table reste editable dans tous les cas. Ce choix sert a la remplir.",
+        )
+
+        if holiday_source == HOLIDAY_SOURCE_FILE:
+            holiday_file = st.file_uploader(
+                "Calendrier holidays (CSV/XLSX)",
+                type=["csv", "xlsx"],
+                key="pricer_holiday_file",
+                help="Colonnes attendues : start_date, end_date, label (optionnel).",
+            )
+            if st.button(
+                "Charger le calendrier dans la table",
+                key="load_pricer_holiday_file",
+                width="stretch",
+                disabled=holiday_file is None,
+            ):
+                try:
+                    holiday_source_df = read_uploaded_table(holiday_file)
+                    holiday_periods_df = parse_holiday_periods_table(holiday_source_df)
+                    st.session_state["pricer_holiday_periods"] = holiday_periods_for_editor(holiday_periods_df)
+                    for warning_message in holiday_periods_df.attrs.get("warnings", []):
+                        st.warning(warning_message)
+                    st.success(f"{len(holiday_periods_df)} periodes holidays chargees.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Import holidays impossible : {exc}")
+        elif holiday_source == HOLIDAY_SOURCE_AUTO:
+            auto_start_year, auto_end_year = compute_holiday_year_range(eval_date, multi_contract_count)
+            observed_holidays = st.checkbox(
+                "Inclure les jours observes",
+                value=True,
+                key="pricer_holiday_observed",
+            )
+            if st.button(
+                "Generer holidays automatiques",
+                key="generate_pricer_holidays",
+                width="stretch",
+            ):
+                try:
+                    holiday_periods_df = build_holiday_periods_from_library(
+                        auto_start_year,
+                        auto_end_year,
+                        country_code="MA",
+                        observed=observed_holidays,
+                        language="fr",
+                    )
+                    st.session_state["pricer_holiday_periods"] = holiday_periods_for_editor(holiday_periods_df)
+                    st.success(f"{len(holiday_periods_df)} periodes holidays generees.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Generation holidays impossible : {exc}")
+
+        if st.button("Vider la table holidays", key="clear_pricer_holidays", width="stretch"):
+            st.session_state["pricer_holiday_periods"] = holiday_periods_for_editor(empty_holiday_periods_df())
+            st.rerun()
+
+        with st.expander("Table holidays", expanded=False):
+            edited_holiday_df = st.data_editor(
+                holiday_periods_for_editor(st.session_state.get("pricer_holiday_periods")),
+                column_config={
+                    "start_date": st.column_config.DateColumn("start_date", format="DD/MM/YYYY"),
+                    "end_date": st.column_config.DateColumn("end_date", format="DD/MM/YYYY"),
+                    "label": st.column_config.TextColumn("label"),
+                    "source": st.column_config.TextColumn("source"),
+                },
+                width="stretch",
+                hide_index=True,
+                num_rows="dynamic",
+                key="pricer_holiday_editor",
+            )
+            st.session_state["pricer_holiday_periods"] = holiday_periods_for_editor(edited_holiday_df)
+
+        active_holiday_periods, holiday_period_warnings = current_holiday_periods_state()
+        selected_contracts = build_upcoming_contracts(
+            eval_date,
+            multi_contract_count,
+            holiday_periods_df=active_holiday_periods,
+        )
         maturity_date = selected_contracts[0]["date"] if selected_contracts else eval_date
 
         days_to_maturity = selected_contracts[0]["days"] if selected_contracts else 0
         future_contract_code = selected_contracts[0]["label"] if selected_contracts else "-"
-        st.caption(f"Premier contrat : {future_contract_code}")
-        if selected_contracts:
-            st.caption(
-                "Contrats selectionnes : " + ", ".join(contract["label"] for contract in selected_contracts)
-            )
-        else:
+        if not selected_contracts:
             st.warning("Aucune echeance trimestrielle disponible apres la date de calcul.")
 
         st.markdown("---")
@@ -799,6 +922,58 @@ def run():
         unsafe_allow_html=True,
     )
 
+    st.markdown(
+        """
+        <div class="section-card">
+            <div class="section-label"><span class="num">0</span> HOLIDAYS</div>
+            <div class="section-heading">Calendrier des fermetures</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    for warning_message in holiday_period_warnings:
+        st.warning(warning_message)
+
+    holiday_col_table, holiday_col_schedule = st.columns(2)
+
+    with holiday_col_table:
+        st.markdown("#### Table active")
+        holiday_table_display = holiday_periods_for_editor(st.session_state.get("pricer_holiday_periods"))
+        if holiday_table_display.empty:
+            st.info("Aucune periode holidays active.")
+        else:
+            st.dataframe(
+                holiday_table_display,
+                width="stretch",
+                hide_index=True,
+                height=260,
+            )
+
+    with holiday_col_schedule:
+        st.markdown("#### Echeances ajustees")
+        if not selected_contracts:
+            st.info("Aucune echeance disponible pour l'apercu.")
+        else:
+            maturity_preview_df = pd.DataFrame(
+                [
+                    {
+                        "Contrat": contract["label"],
+                        "Date theorique": contract["theoretical_date"].strftime("%d/%m/%Y"),
+                        "Date retenue": contract["date"].strftime("%d/%m/%Y"),
+                        "Decalee": "Oui" if contract["adjusted"] else "Non",
+                        "Recul (j)": contract["rolled_days"],
+                    }
+                    for contract in selected_contracts
+                ]
+            )
+            st.dataframe(
+                maturity_preview_df,
+                width="stretch",
+                hide_index=True,
+                height=260,
+            )
+
 
     st.markdown(
         """
@@ -831,16 +1006,6 @@ def run():
         )
 
         if rate_source == RATE_SOURCE_MARKET:
-            st.markdown(
-                """
-                <div class="alert-info" style="font-size: 0.82rem; padding: 0.6rem;">
-                    Importez le CSV de taux. Les maturites sont detectees depuis les dates,
-                    la courbe affiche les taux BAM originaux, puis chaque future utilise
-                    ensuite sa propre base cible pour determiner son taux sans risque.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
             uploaded_market = st.file_uploader("CSV bons du Tresor", type=["csv"], key="market_csv")
             if uploaded_market is not None:
                 try:
@@ -891,29 +1056,11 @@ def run():
                     source_name="Taux manuel",
                 )
                 yc_ready = True
-                st.markdown(
-                    f"""
-                    <div class="alert-info" style="font-size: 0.82rem; padding: 0.6rem;">
-                        Convention cible : <strong>{basis_label_for_days(effective_days_to_maturity)}</strong>.
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
             except Exception as exc:
                 st.error(f"Taux manuel invalide : {exc}")
 
     with col_import_bvc:
         st.markdown("#### Donnees actions")
-        st.markdown(
-            """
-            <div class="alert-info" style="font-size: 0.85rem; padding: 0.75rem;">
-                Recuperez d'abord les <code>Cours</code> et <code>Capitalisations</code> du MASI20,
-                puis importez la base facteurs avec <code>Titre</code> en premiere colonne :
-                <code>Titre</code>, <code>Flottant</code>, <code>Plafonnement</code>.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
         for state_key, default_value in (
             ("bvc_prices_imported", {}),
@@ -927,7 +1074,6 @@ def run():
             if state_key not in st.session_state:
                 st.session_state[state_key] = default_value
 
-        st.caption(f"API marche actions : {MASI20_INDEX_PAGE_URL}")
         if st.button("Fetch cours + caps MASI20", key="fetch_market_masi20", width="stretch"):
             try:
                 fetched_market_rows, fetched_market_at = fetch_masi20_market_snapshot()
@@ -979,7 +1125,7 @@ def run():
 
         factor_file = st.file_uploader(
             "Base facteurs MASI20 (CSV/XLSX)",
-            type=["csv", "xlsx", "xls"],
+            type=["csv", "xlsx"],
             key="factor_file_upload",
         )
 
@@ -1178,37 +1324,18 @@ def run():
     if isinstance(imported_factor_df, pd.DataFrame) and not imported_factor_df.empty:
         df_weights = imported_factor_df.copy()
         tickers_available = df_weights["Ticker_Short"].tolist()
-        weights_source_label = "Base facteurs importee"
     else:
         tickers_available = []
         df_weights = None
-        weights_source_label = "Base facteurs absente"
 
     div_data_key = "div_data_free"
     imported_titles = st.session_state.get("bvc_titles_imported", [])
     imported_prices = st.session_state.get("bvc_prices_imported", {})
     imported_caps = st.session_state.get("bvc_caps_imported", {})
-    market_source_label = (
-        f"Fetch auto ({len(imported_titles)} titres)"
-        if imported_titles
-        else "Cours/capitalisations non charges"
-    )
 
     target_dividend_titles = imported_titles or tickers_available
     existing_dividend_map = st.session_state.get("bvc_dividends_imported", {})
     ensure_dividend_table_state(div_data_key, target_dividend_titles, existing_dividend_map)
-
-    st.markdown(
-        """
-        <div class="alert-info">
-            Les cours et capitalisations proviennent du fetch de la section 1.
-            Renseignez ici uniquement les dividendes par ticker.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.caption(f"Source facteurs MASI20 : {weights_source_label}")
-    st.caption(f"Source marche actions : {market_source_label}")
 
     if imported_titles:
         with st.expander("Apercu cours / capitalisations fetches", expanded=False):
@@ -1221,7 +1348,7 @@ def run():
 
     dividend_file = st.file_uploader(
         "Importer un fichier dividendes (CSV/XLSX)",
-        type=["csv", "xlsx", "xls"],
+        type=["csv", "xlsx"],
         key="dividend_file_upload",
         help="Colonnes attendues : Titre, Dividende. Les tickers type ADH MC Equity sont acceptes.",
     )
@@ -1408,7 +1535,6 @@ def run():
 
     with col_p1:
         st.metric("Spot", "-" if not spot_ready else f"{spot_price:.2f}")
-        st.caption(spot_source_caption)
 
     with col_p2:
         d_override = st.number_input(
@@ -1424,9 +1550,6 @@ def run():
 
     with col_p3:
         st.metric("Nombre de contrats", str(len(selected_contracts)))
-        st.caption(
-            f"Calcul au {effective_eval_date.strftime('%d/%m/%Y')} | 1re echeance : {maturity_date.strftime('%d/%m/%Y') if hasattr(maturity_date, 'strftime') else maturity_date}"
-        )
 
     if not spot_ready:
         missing_spot_message = (
@@ -1472,9 +1595,6 @@ def run():
                 }
             )
 
-        st.caption(
-            f"{len(multi_records)} contrats trimestriels selectionnes a partir du {effective_eval_date.strftime('%d/%m/%Y')}."
-        )
         for start_idx in range(0, len(multi_records), 3):
             contract_chunk = multi_records[start_idx:start_idx + 3]
             chunk_columns = st.columns(len(contract_chunk))

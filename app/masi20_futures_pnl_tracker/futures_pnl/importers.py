@@ -35,6 +35,12 @@ def _text_series(dataframe: pd.DataFrame, column: str | None) -> pd.Series:
     ).astype("object")
 
 
+def _upper_text_series(dataframe: pd.DataFrame, column: str | None) -> pd.Series:
+    return _text_series(dataframe, column).map(
+        lambda value: value.upper() if pd.notna(value) else pd.NA
+    )
+
+
 def _numeric_series(dataframe: pd.DataFrame, column: str | None) -> pd.Series:
     text = _text_series(dataframe, column).astype("string")
     cleaned = (
@@ -106,18 +112,12 @@ def prepare_transaction_import(raw_dataframe: pd.DataFrame) -> tuple[pd.DataFram
         imported = pd.DataFrame(
             {field: dataframe[internal_mapping[field]] for field in TRANSACTION_COLUMNS}
         )
-        imported["execution_id"] = _text_series(imported, "execution_id").map(
-            lambda value: value.upper() if pd.notna(value) else pd.NA
-        )
+        imported["execution_id"] = _upper_text_series(imported, "execution_id")
         imported["contract"] = _text_series(imported, "contract").map(normalize_contract_code)
-        imported["side_lp"] = _text_series(imported, "side_lp").map(
-            lambda value: value.upper() if pd.notna(value) else pd.NA
-        )
+        imported["side_lp"] = _upper_text_series(imported, "side_lp")
         imported["counterparty"] = _text_series(imported, "counterparty")
         imported["counterparty_type"] = _text_series(imported, "counterparty_type")
-        imported["status"] = _text_series(imported, "status").map(
-            lambda value: value.upper() if pd.notna(value) else pd.NA
-        )
+        imported["status"] = _upper_text_series(imported, "status")
         imported["quantity_lots"] = pd.to_numeric(imported["quantity_lots"], errors="coerce")
         imported["price_points"] = pd.to_numeric(imported["price_points"], errors="coerce")
         return imported[TRANSACTION_COLUMNS], "Registre interne", []
@@ -161,9 +161,7 @@ def prepare_transaction_import(raw_dataframe: pd.DataFrame) -> tuple[pd.DataFram
             "trade_date": trade_date,
             "trade_time": trade_time,
             "contract": _text_series(dataframe, symbol_col).map(normalize_contract_code),
-            "side_lp": _text_series(dataframe, side_col).map(
-                lambda value: value.upper() if pd.notna(value) else pd.NA
-            ),
+            "side_lp": _upper_text_series(dataframe, side_col),
             "quantity_lots": _numeric_series(dataframe, executed_size_col),
             "price_points": _numeric_series(dataframe, average_price_col),
             "counterparty": _first_non_empty(dataframe, [contra_firm_col, client_id_col]),

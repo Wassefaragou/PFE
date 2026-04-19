@@ -17,6 +17,23 @@ SETTINGS_PATH = STORAGE_DIR / "settings.json"
 CONTRACTS_PATH = STORAGE_DIR / "contracts.csv"
 TRANSACTIONS_PATH = STORAGE_DIR / "transactions.csv"
 DAILY_PRICES_PATH = STORAGE_DIR / "daily_prices.csv"
+CSV_STORAGE_LAYOUT = (
+    (CONTRACTS_PATH, CONTRACT_COLUMNS),
+    (TRANSACTIONS_PATH, TRANSACTION_COLUMNS),
+    (DAILY_PRICES_PATH, DAILY_PRICE_COLUMNS),
+)
+
+
+def _empty_frame(columns: list[str]) -> pd.DataFrame:
+    return pd.DataFrame(columns=columns)
+
+
+def _ensure_frame_columns(dataframe: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    output = dataframe.copy()
+    for column in columns:
+        if column not in output.columns:
+            output[column] = pd.NA
+    return output[columns]
 
 
 def ensure_storage() -> None:
@@ -24,32 +41,21 @@ def ensure_storage() -> None:
     if not SETTINGS_PATH.exists():
         with SETTINGS_PATH.open("w", encoding="utf-8") as handle:
             json.dump(default_settings(), handle, indent=2)
-    if not CONTRACTS_PATH.exists():
-        pd.DataFrame(columns=CONTRACT_COLUMNS).to_csv(CONTRACTS_PATH, index=False)
-    if not TRANSACTIONS_PATH.exists():
-        pd.DataFrame(columns=TRANSACTION_COLUMNS).to_csv(TRANSACTIONS_PATH, index=False)
-    if not DAILY_PRICES_PATH.exists():
-        pd.DataFrame(columns=DAILY_PRICE_COLUMNS).to_csv(DAILY_PRICES_PATH, index=False)
+    for path, columns in CSV_STORAGE_LAYOUT:
+        if not path.exists():
+            _empty_frame(columns).to_csv(path, index=False)
 
 
 def _load_csv(path: Path, columns: list[str]) -> pd.DataFrame:
     ensure_storage()
     if not path.exists() or path.stat().st_size == 0:
-        return pd.DataFrame(columns=columns)
-    dataframe = pd.read_csv(path)
-    for column in columns:
-        if column not in dataframe.columns:
-            dataframe[column] = pd.NA
-    return dataframe[columns]
+        return _empty_frame(columns)
+    return _ensure_frame_columns(pd.read_csv(path), columns)
 
 
 def _save_csv(path: Path, dataframe: pd.DataFrame, columns: list[str]) -> None:
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    output = dataframe.copy()
-    for column in columns:
-        if column not in output.columns:
-            output[column] = pd.NA
-    output = output[columns]
+    output = _ensure_frame_columns(dataframe, columns)
     for column in output.columns:
         if pd.api.types.is_datetime64_any_dtype(output[column]):
             output[column] = output[column].dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -124,6 +130,6 @@ def save_daily_prices(dataframe: pd.DataFrame) -> None:
 def reset_storage() -> None:
     ensure_storage()
     save_settings(default_settings())
-    save_contracts(pd.DataFrame(columns=CONTRACT_COLUMNS))
-    save_transactions(pd.DataFrame(columns=TRANSACTION_COLUMNS))
-    save_daily_prices(pd.DataFrame(columns=DAILY_PRICE_COLUMNS))
+    save_contracts(_empty_frame(CONTRACT_COLUMNS))
+    save_transactions(_empty_frame(TRANSACTION_COLUMNS))
+    save_daily_prices(_empty_frame(DAILY_PRICE_COLUMNS))

@@ -29,16 +29,32 @@ def _issues_to_dataframe(issues: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(issues)
 
 
-def validate_contracts(contracts_df: pd.DataFrame, settings: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
-    contracts = contracts_df.copy() if contracts_df is not None else pd.DataFrame(columns=CONTRACT_COLUMNS)
-    for column in CONTRACT_COLUMNS:
-        if column not in contracts.columns:
-            contracts[column] = pd.NA
-    contracts = clear_contract_overrides(enrich_contract_reference(contracts[CONTRACT_COLUMNS].copy()))
-    contracts["row_number"] = np.arange(1, len(contracts) + 1)
-    contracts["comments"] = _normalize_text(contracts["comments"]).map(
+def _ensure_columns(dataframe: pd.DataFrame | None, columns: list[str]) -> pd.DataFrame:
+    output = dataframe.copy() if dataframe is not None else pd.DataFrame(columns=columns)
+    for column in columns:
+        if column not in output.columns:
+            output[column] = pd.NA
+    return output[columns].copy()
+
+
+def _strip_text(series: pd.Series) -> pd.Series:
+    return _normalize_text(series).map(
         lambda value: str(value).strip() if pd.notna(value) else pd.NA
     )
+
+
+def _upper_text(series: pd.Series) -> pd.Series:
+    return _strip_text(series).map(
+        lambda value: value.upper() if pd.notna(value) else pd.NA
+    )
+
+
+def validate_contracts(contracts_df: pd.DataFrame, settings: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    contracts = clear_contract_overrides(
+        enrich_contract_reference(_ensure_columns(contracts_df, CONTRACT_COLUMNS))
+    )
+    contracts["row_number"] = np.arange(1, len(contracts) + 1)
+    contracts["comments"] = _strip_text(contracts["comments"])
     contracts["expiry_date_parsed"] = pd.to_datetime(contracts["expiry_date"], errors="coerce").dt.normalize()
     contracts["expiry_date"] = contracts["expiry_date_parsed"].dt.strftime("%Y-%m-%d")
     contracts.loc[contracts["expiry_date_parsed"].isna(), "expiry_date"] = pd.NA
@@ -130,30 +146,16 @@ def validate_contracts(contracts_df: pd.DataFrame, settings: dict) -> tuple[pd.D
 def validate_transactions(
     transactions_df: pd.DataFrame, contracts_df: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    transactions = (
-        transactions_df.copy() if transactions_df is not None else pd.DataFrame(columns=TRANSACTION_COLUMNS)
-    )
-    for column in TRANSACTION_COLUMNS:
-        if column not in transactions.columns:
-            transactions[column] = pd.NA
-    transactions = transactions[TRANSACTION_COLUMNS].copy()
+    transactions = _ensure_columns(transactions_df, TRANSACTION_COLUMNS)
     transactions["row_number"] = np.arange(1, len(transactions) + 1)
 
     for column in ["execution_id", "contract", "side_lp", "counterparty", "counterparty_type", "status"]:
-        transactions[column] = _normalize_text(transactions[column]).map(
-            lambda value: str(value).strip() if pd.notna(value) else pd.NA
-        )
+        transactions[column] = _strip_text(transactions[column])
 
-    transactions["execution_id"] = transactions["execution_id"].map(
-        lambda value: value.upper() if pd.notna(value) else pd.NA
-    )
+    transactions["execution_id"] = _upper_text(transactions["execution_id"])
     transactions["contract"] = transactions["contract"].map(normalize_contract_code)
-    transactions["side_lp"] = transactions["side_lp"].map(
-        lambda value: value.upper() if pd.notna(value) else pd.NA
-    )
-    transactions["status"] = transactions["status"].map(
-        lambda value: value.upper() if pd.notna(value) else pd.NA
-    )
+    transactions["side_lp"] = _upper_text(transactions["side_lp"])
+    transactions["status"] = _upper_text(transactions["status"])
     transactions["status"] = transactions["status"].map(
         lambda value: STATUS_ALIASES.get(value, value) if pd.notna(value) else pd.NA
     )

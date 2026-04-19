@@ -273,6 +273,16 @@ def format_number(value: float) -> str:
     return f"{value:,.2f}"
 
 
+def format_expiry_month(value: object) -> str:
+    if pd.isna(value):
+        return "-"
+    parsed_value = pd.to_datetime(value, errors="coerce")
+    if pd.notna(parsed_value):
+        return parsed_value.strftime("%m/%Y")
+    text = str(value).strip()
+    return text if text else "-"
+
+
 def label_for(name: str) -> str:
     return DISPLAY_LABELS.get(name, name.replace("_", " ").strip().capitalize())
 
@@ -312,7 +322,9 @@ def prepare_table_view(
 
     display_view = source_view.copy()
     for column in display_view.columns:
-        if column in BOOLEAN_COLUMNS or pd.api.types.is_bool_dtype(display_view[column]):
+        if column == "expiry_date":
+            display_view[column] = display_view[column].map(format_expiry_month)
+        elif column in BOOLEAN_COLUMNS or pd.api.types.is_bool_dtype(display_view[column]):
             display_view[column] = display_view[column].map(_display_bool)
         elif column in VALUE_LABELS:
             display_view[column] = display_view[column].map(lambda value, current=column: format_choice_value(current, value))
@@ -460,13 +472,11 @@ def render_hero(title: str, subtitle: str = "", badges: list | None = None) -> N
         else:
             badges_html_parts.append(_badge_html(str(badge)))
     badges_html = "".join(badges_html_parts)
-    subtitle_html = f'<div class="hero-sub">{escape(subtitle)}</div>' if subtitle else ""
     badge_block = f'<div class="hero-badges">{badges_html}</div>' if badges_html else ""
     st.markdown(
         f"""
         <div class="hero-wrap">
             <h1 class="hero-title">{escape(title)}</h1>
-            {subtitle_html}
             {badge_block}
         </div>
         """,
@@ -481,13 +491,11 @@ def render_section_header(
     label: str = "Section",
 ) -> None:
     num_html = f'<span class="num">{escape(str(step))}</span>' if step is not None else ""
-    subtitle_html = f'<div class="section-subtitle">{escape(subtitle)}</div>' if subtitle else ""
     st.markdown(
         f"""
         <div class="section-card">
             <div class="section-label">{num_html}{escape(label)}</div>
             <div class="section-heading">{escape(title)}</div>
-            {subtitle_html}
         </div>
         """,
         unsafe_allow_html=True,
@@ -495,27 +503,16 @@ def render_section_header(
 
 
 def render_form_group(title: str, subtitle: str = "") -> None:
-    subtitle_html = f'<div class="form-group-subtitle">{escape(subtitle)}</div>' if subtitle else ""
     st.markdown(
         f"""
         <div class="form-group-title">{escape(title)}</div>
-        {subtitle_html}
         """,
         unsafe_allow_html=True,
     )
 
 
 def render_micro_note(title: str, body: str, tone: str = "info") -> None:
-    tone_class = f"micro-note micro-note-{tone}"
-    st.markdown(
-        f"""
-        <div class="{escape(tone_class)}">
-            <div class="micro-note-title">{escape(title)}</div>
-            <div class="micro-note-body">{escape(body)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    return
 
 
 def render_status_box(message: str, kind: str = "info") -> None:
@@ -644,16 +641,15 @@ def append_dataframe_rows(
     incoming_df: pd.DataFrame | None,
     columns: list[str],
 ) -> pd.DataFrame:
-    existing = existing_df.copy() if existing_df is not None else pd.DataFrame(columns=columns)
-    incoming = incoming_df.copy() if incoming_df is not None else pd.DataFrame(columns=columns)
-
-    for dataframe in (existing, incoming):
+    def _ensure_table_columns(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+        output = dataframe.copy() if dataframe is not None else pd.DataFrame(columns=columns)
         for column in columns:
-            if column not in dataframe.columns:
-                dataframe[column] = pd.NA
+            if column not in output.columns:
+                output[column] = pd.NA
+        return output[columns]
 
-    existing = existing[columns]
-    incoming = incoming[columns]
+    existing = _ensure_table_columns(existing_df)
+    incoming = _ensure_table_columns(incoming_df)
 
     if incoming.empty:
         return existing.reset_index(drop=True)
@@ -661,6 +657,7 @@ def append_dataframe_rows(
         return incoming.reset_index(drop=True)
 
     return pd.concat([existing, incoming], ignore_index=True)
+
 
 def load_app_state() -> dict:
     ensure_storage()

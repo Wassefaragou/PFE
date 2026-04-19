@@ -1,32 +1,47 @@
-import os
 import sys
+from collections.abc import Callable
 from html import escape
+from pathlib import Path
+from typing import TypedDict
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+class AppConfig(TypedDict):
+    eyebrow: str
+    title: str
+    accent: str
+    runner: Callable[[], None]
+
+
+ROOT_DIR = Path(__file__).resolve().parent
 NAVIGATION_STATE_KEY = "selected_app"
 FAVICON_URL = "https://www.google.com/s2/favicons?domain=attijariwafabank.com&sz=128"
 HOME_APP_TITLE = "Plateforme FUTURES MASI20"
-HOME_APP_SUBTITLE = "Choisissez l'outil que vous voulez ouvrir."
-
-for subdir in (
+HOME_APP_SUBTITLE = ""
+MODULE_SUBDIRS = (
     "masi20_futures_pnl_tracker",
     "masi20_futures_pricer",
     "masi20_index_replication",
-):
-    module_path = os.path.join(ROOT_DIR, subdir)
-    if module_path not in sys.path:
-        sys.path.append(module_path)
+)
+
+
+def register_module_paths() -> None:
+    for subdir in MODULE_SUBDIRS:
+        module_path = str(ROOT_DIR / subdir)
+        if module_path not in sys.path:
+            sys.path.append(module_path)
+
+
+register_module_paths()
 
 from masi20_futures_pnl_tracker_app import run as run_pnl_tracker
 from masi20_futures_pricer_app import run as run_futures_pricer
 from masi20_index_replication_app import run as run_index_replication
 
 
-APP_REGISTRY = {
+APP_REGISTRY: dict[str, AppConfig] = {
     "pnl_tracker": {
         "eyebrow": "Desk Monitoring",
         "title": "MASI20 Futures PnL Tracker",
@@ -255,12 +270,12 @@ def inject_home_styles() -> None:
     )
 
 
-def render_app_card(app_config: dict[str, object]) -> None:
+def render_app_card(app_config: AppConfig) -> None:
     st.markdown(
         f"""
         <div class="app-card" style="--card-accent: {app_config['accent']};">
-            <div class="app-eyebrow">{escape(str(app_config['eyebrow']))}</div>
-            <h3>{escape(str(app_config['title']))}</h3>
+            <div class="app-eyebrow">{escape(app_config['eyebrow'])}</div>
+            <h3>{escape(app_config['title'])}</h3>
         </div>
         """,
         unsafe_allow_html=True,
@@ -270,23 +285,27 @@ def render_app_card(app_config: dict[str, object]) -> None:
 def render_home() -> None:
     apply_home_favicon()
     inject_home_styles()
+    subtitle_html = (
+        f'<div class="home-subtitle">{escape(HOME_APP_SUBTITLE)}</div>'
+        if HOME_APP_SUBTITLE
+        else ""
+    )
 
     st.markdown(
         f"""
         <div class="home-hero">
             <div class="home-title">{escape(HOME_APP_TITLE)}</div>
-            <div class="home-subtitle">{escape(HOME_APP_SUBTITLE)}</div>
+            {subtitle_html}
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.markdown('<div class="home-section-label">Choisir une application</div>', unsafe_allow_html=True)
 
-    columns = st.columns(3)
-    app_keys = list(APP_REGISTRY.keys())
+    app_entries = list(APP_REGISTRY.items())
+    columns = st.columns(len(app_entries))
 
-    for column, app_key in zip(columns, app_keys):
-        app_config = APP_REGISTRY[app_key]
+    for column, (app_key, app_config) in zip(columns, app_entries):
         with column:
             render_app_card(app_config)
             if st.button("Ouvrir", key=f"open_{app_key}", use_container_width=True):
@@ -294,8 +313,7 @@ def render_home() -> None:
 
 
 def main() -> None:
-    if NAVIGATION_STATE_KEY not in st.session_state:
-        st.session_state[NAVIGATION_STATE_KEY] = None
+    st.session_state.setdefault(NAVIGATION_STATE_KEY, None)
 
     selected_app = st.session_state[NAVIGATION_STATE_KEY]
     if selected_app in APP_REGISTRY:

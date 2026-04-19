@@ -41,6 +41,7 @@ MONTH_CODE_ALIASES = {
 }
 
 CONTRACT_CODE_PATTERN = re.compile(r"^(FMASI20)([A-Z]{3})(\d{2})$")
+QUARTERLY_MATURITY_MONTHS = (3, 6, 9, 12)
 
 GLOBAL_PARAMETER_COLUMNS = [
     "tick_value",
@@ -76,6 +77,14 @@ def _last_friday_of_month(year: int, month: int) -> pd.Timestamp:
     return candidate.normalize()
 
 
+def _ensure_contract_reference_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
+    contracts = dataframe.copy()
+    for column in ("expiry_date", "contract_code"):
+        if column not in contracts.columns:
+            contracts[column] = pd.NA
+    return contracts
+
+
 def upcoming_contract_schedule(
     reference_date: pd.Timestamp | str | None = None,
     *,
@@ -94,10 +103,9 @@ def upcoming_contract_schedule(
 
     schedule: list[dict] = []
     current_year = int(reference.year)
-    maturity_months = [3, 6, 9, 12]
 
     while len(schedule) < contract_count:
-        for month in maturity_months:
+        for month in QUARTERLY_MATURITY_MONTHS:
             expiry_date = _last_friday_of_month(current_year, month)
             days_to_expiry = int((expiry_date - reference).days)
             if days_to_expiry <= 0:
@@ -123,16 +131,12 @@ def enrich_contract_reference(
     *,
     force_contract_code: bool = False,
 ) -> pd.DataFrame:
-    contracts = dataframe.copy() if dataframe is not None else pd.DataFrame()
-    if "expiry_date" not in contracts.columns:
-        contracts["expiry_date"] = pd.NA
-    if "contract_code" not in contracts.columns:
-        contracts["contract_code"] = pd.NA
+    contracts = _ensure_contract_reference_columns(
+        dataframe.copy() if dataframe is not None else pd.DataFrame()
+    )
 
     expiry_dates = pd.to_datetime(contracts["expiry_date"], errors="coerce").dt.normalize()
-    existing_codes = contracts["contract_code"].map(
-        normalize_contract_code
-    )
+    existing_codes = contracts["contract_code"].map(normalize_contract_code)
     generated_codes = expiry_dates.map(
         lambda value: normalize_contract_code(_ticker_from_timestamp(value)) if pd.notna(value) else pd.NA
     )

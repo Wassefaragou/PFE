@@ -534,8 +534,6 @@ def run():
                     
             editor_data = [{"ticker": t, "price": imported_prices.get(normalize_ticker(t), 0.0)} for t in tickers]
         elif price_mode == PRICE_SOURCE_API:
-            st.caption("Récupère les cours actions via la même API Casablanca Bourse que le pricer.")
-
             if st.button("Fetch prix MASI20", key=f"{key_prefix}_fetch_bvc_prices", width='stretch'):
                 try:
                     fetched_rows, fetched_at = fetch_masi20_market_snapshot()
