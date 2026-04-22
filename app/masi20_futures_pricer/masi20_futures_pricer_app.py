@@ -570,13 +570,26 @@ def run():
         return pd.DataFrame(records).drop_duplicates(subset=["Ticker_Short"], keep="last").reset_index(drop=True)
 
 
+    def build_dividend_lookup(existing_dividends: dict[str, float] | None = None) -> dict[str, float]:
+        dividend_lookup: dict[str, float] = {}
+        for ticker, dividend_value in (existing_dividends or {}).items():
+            ticker_key = title_key(ticker)
+            if not ticker_key or dividend_value is None or pd.isna(dividend_value):
+                continue
+            try:
+                dividend_lookup[ticker_key] = float(dividend_value)
+            except (TypeError, ValueError):
+                continue
+        return dividend_lookup
+
+
     def build_dividend_table(titles: list[str], existing_dividends: dict[str, float] | None = None) -> pd.DataFrame:
-        dividend_map = existing_dividends or {}
+        dividend_lookup = build_dividend_lookup(existing_dividends)
         return pd.DataFrame(
             [
                 {
                     "Ticker": ticker,
-                    "Dividende (Di)": dividend_map.get(ticker, None),
+                    "Dividende (Di)": dividend_lookup.get(title_key(ticker), None),
                 }
                 for ticker in titles
             ]
@@ -1129,10 +1142,22 @@ def run():
             key="factor_file_upload",
         )
 
+        stored_factor_df = st.session_state.get("masi_factor_df_imported", pd.DataFrame())
+        has_stored_factor_df = isinstance(stored_factor_df, pd.DataFrame) and not stored_factor_df.empty
+
         if factor_file is None:
-            st.session_state["masi_factor_df_imported"] = pd.DataFrame()
             if market_fetch_ready:
-                st.info("Importez la base facteurs MASI20 pour lancer la validation.")
+                if has_stored_factor_df:
+                    st.markdown(
+                        f"""
+                        <div class="alert-success" style="font-size: 0.85rem; padding: 0.5rem;">
+                            Base facteurs MASI20 conservee : <strong>{len(stored_factor_df)} titres</strong> valides.
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.info("Importez la base facteurs MASI20 pour lancer la validation.")
         elif market_fetch_ready:
             try:
                 factor_source_df = read_uploaded_table(factor_file)
