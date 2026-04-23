@@ -64,7 +64,6 @@ def compute_contract_metrics(
                 "commissions_mad",
                 "pnl_management_mad",
                 "notional_mad",
-                "signed_notional_mad",
                 "margin_mad",
                 "peak_abs_position",
                 "capital_engaged_mad",
@@ -110,8 +109,8 @@ def compute_contract_metrics(
         pnl_accounting_mad = pnl_unrealized_mad + pnl_realized_mad
         commissions_mad = float(matched_qty * round_trip_fee_per_lot)
         pnl_management_mad = pnl_accounting_mad - commissions_mad
-        notional_mad = float(entry_wap * tick_value * abs_position) if abs_position > 0 else 0.0
-        signed_notional_mad = float(entry_wap * tick_value * net_position) if net_position != 0 else 0.0
+        open_contracts = abs_position
+        notional_mad = float(entry_wap * tick_value * open_contracts) if open_contracts > 0 else 0.0
         margin_mad = float(abs_position * contract.effective_initial_margin_per_lot)
         peak_abs_position = _peak_abs_position_from_trades(contract_trades)
         capital_engaged_mad = float(peak_abs_position * contract.effective_initial_margin_per_lot)
@@ -151,7 +150,6 @@ def compute_contract_metrics(
                 "commissions_mad": commissions_mad,
                 "pnl_management_mad": pnl_management_mad,
                 "notional_mad": notional_mad,
-                "signed_notional_mad": signed_notional_mad,
                 "margin_mad": margin_mad,
                 "peak_abs_position": peak_abs_position,
                 "capital_engaged_mad": capital_engaged_mad,
@@ -177,7 +175,6 @@ def compute_global_metrics(contract_metrics_df: pd.DataFrame) -> dict:
         "total_commissions": float(contract_metrics_df.get("commissions_mad", pd.Series(dtype=float)).sum()),
         "total_management_pnl": float(contract_metrics_df.get("pnl_management_mad", pd.Series(dtype=float)).sum()),
         "total_notional": float(contract_metrics_df.get("notional_mad", pd.Series(dtype=float)).sum()),
-        "total_net_notional": float(contract_metrics_df.get("signed_notional_mad", pd.Series(dtype=float)).sum()),
         "total_margin": float(contract_metrics_df.get("margin_mad", pd.Series(dtype=float)).sum()),
     }
     total_margin = totals["total_margin"]
@@ -219,7 +216,6 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
         "side_label",
         "abs_position",
         "notional_mad",
-        "signed_notional_mad",
         "margin_mad",
         "leverage",
         "position_limit_breach",
@@ -290,12 +286,7 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
 
     portfolio["abs_position"] = portfolio["cmp_final_position"].abs()
     portfolio["side_label"] = portfolio["cmp_final_position"].map(_side_label_from_position)
-    portfolio["notional_mad"] = (
-        portfolio["abs_position"] * portfolio["cmp_final_cost"] * portfolio["effective_tick_value"]
-    )
-    portfolio["signed_notional_mad"] = (
-        portfolio["cmp_final_position"] * portfolio["cmp_final_cost"] * portfolio["effective_tick_value"]
-    )
+    portfolio["notional_mad"] = portfolio["abs_position"] * portfolio["cmp_final_cost"] * portfolio["effective_tick_value"]
     portfolio["margin_mad"] = portfolio["abs_position"] * portfolio["effective_initial_margin_per_lot"]
     portfolio["leverage"] = np.where(
         portfolio["margin_mad"].ne(0),
@@ -316,7 +307,6 @@ def compute_cmp_global_metrics(cmp_portfolio_df: pd.DataFrame) -> dict:
         "total_cmp_realized": float(cmp_portfolio_df.get("cmp_realized_total", pd.Series(dtype=float)).sum()),
         "total_cmp_pnl": float(cmp_portfolio_df.get("cmp_total", pd.Series(dtype=float)).sum()),
         "total_notional": float(cmp_portfolio_df.get("notional_mad", pd.Series(dtype=float)).sum()),
-        "total_net_notional": float(cmp_portfolio_df.get("signed_notional_mad", pd.Series(dtype=float)).sum()),
         "total_margin": float(cmp_portfolio_df.get("margin_mad", pd.Series(dtype=float)).sum()),
     }
     total_margin = totals["total_margin"]

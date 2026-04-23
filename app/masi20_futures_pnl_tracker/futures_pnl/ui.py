@@ -62,8 +62,7 @@ DISPLAY_LABELS = {
     "counterparty": "Contrepartie",
     "counterparty_type": "Type cpty",
     "status": "Statut",
-    "notional_mad": "Exposition brute",
-    "signed_notional_mad": "Exposition nette",
+    "notional_mad": "Notionnel",
     "is_confirmed": "Confirmee",
     "is_valid_for_calc": "Valide calcul",
     "is_official_for_calc": "Inclus P&L officiel",
@@ -108,7 +107,6 @@ DISPLAY_LABELS = {
     "contract_count": "Nb contrats",
     "nb_transactions": "Nb transactions",
     "quantite_totale": "Quantité totale",
-    "notionnel_total_mad": "Notionnel total MAD",
     "inclus_pnl_officiel": "Nb inclus P&L officiel",
     "daily_delta": "Delta jour",
     "daily_variation_mad": "Var. jour MAD",
@@ -170,8 +168,6 @@ BOOLEAN_COLUMNS = POSITIVE_FLAG_COLUMNS | NEGATIVE_FLAG_COLUMNS | {
 }
 MONEY_COLUMNS = {
     "notional_mad",
-    "notionnel_total_mad",
-    "signed_notional_mad",
     "pnl_unrealized_mad",
     "pnl_realized_mad",
     "pnl_accounting_mad",

@@ -602,7 +602,7 @@ def run():
                 w_target_arr = np.array(w_target_filtered)
                 prices_arr = np.array(prices_filtered)
                 
-                n, cash_rem, w_real, final_J = greedy_round_l2(w_target_arr, prices_arr, V, penalize_cash=True)
+                n, cash_rem, w_real, _final_J = greedy_round_l2(w_target_arr, prices_arr, V, penalize_cash=True)
                 
                 invested = V - cash_rem
                 cash_weight = cash_rem / V
@@ -625,12 +625,11 @@ def run():
                 except Exception as e:
                     pass
                 
-                c1, c2, c3, c4, c5 = st.columns(5)
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Investi (MAD)", f"{invested:,.0f}")
                 c2.metric("Cash (MAD)", f"{cash_rem:,.0f}")
                 c3.metric("Cash (%)", f"{cash_weight*100:.2f}%")
-                c4.metric("Erreur L2", f"{final_J:.6f}")
-                c5.metric("TE après arrondi", new_te_str, help=f"TE calculé du {start_date_str} au {end_date_str} avec les poids réalisés.")
+                c4.metric("TE après arrondi", new_te_str, help=f"TE calculé du {start_date_str} au {end_date_str} avec les poids réalisés.")
                 
                 # Affichage de la table
                 res_df = pd.DataFrame({

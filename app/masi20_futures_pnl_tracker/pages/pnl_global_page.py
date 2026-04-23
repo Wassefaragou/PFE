@@ -45,8 +45,7 @@ render_metric_cards(
         {"label": "P&L realise", "value": format_currency(global_metrics["total_realized_pnl"]), "glow": "green"},
         {"label": "P&L comptable", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
         {"label": "Commissions", "value": format_currency(global_metrics["total_commissions"]), "glow": "red"},
-        {"label": "Exposition brute", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
-        {"label": "Exposition nette", "value": format_currency(global_metrics["total_net_notional"]), "glow": "purple"},
+        {"label": "Notionnel", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
         {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
         {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "ROI sur marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
@@ -128,15 +127,13 @@ else:
                 "margin_mad",
                 "capital_engaged_mad",
                 "notional_mad",
-                "signed_notional_mad",
                 "leverage",
                 "position_limit_breach",
                 "expiry_alert",
             ],
             label_overrides={
                 "entry_wap": "CMP WAP",
-                "notional_mad": "Exposition brute",
-                "signed_notional_mad": "Exposition nette",
+                "notional_mad": "Notionnel",
             },
         )
 
@@ -168,6 +165,7 @@ else:
             ],
             label_overrides={
                 "mtm_coverage": "Disponibilite cours",
+                "notional_mad": "Notionnel",
             },
         )
 

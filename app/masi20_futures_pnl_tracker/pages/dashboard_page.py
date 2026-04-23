@@ -48,8 +48,7 @@ render_metric_cards(
         {"label": "P&L comptable", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
         {"label": "P&L latent", "value": format_currency(global_metrics["total_unrealized_pnl"]), "glow": "blue"},
         {"label": "P&L realise", "value": format_currency(global_metrics["total_realized_pnl"]), "glow": "green"},
-        {"label": "Exposition brute", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
-        {"label": "Exposition nette", "value": format_currency(global_metrics["total_net_notional"]), "glow": "purple"},
+        {"label": "Notionnel", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
         {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
         {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "Commissions", "value": format_currency(global_metrics["total_commissions"]), "glow": "red"},
@@ -109,13 +108,10 @@ else:
             "pnl_realized_mad",
             "pnl_management_mad",
             "margin_mad",
-            "signed_notional_mad",
+            "notional_mad",
             "position_limit_breach",
             "expiry_alert",
         ],
-        label_overrides={
-            "signed_notional_mad": "Exposition nette",
-        },
     )
 
 render_section_header(

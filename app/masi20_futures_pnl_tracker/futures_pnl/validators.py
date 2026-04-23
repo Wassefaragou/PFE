@@ -176,9 +176,6 @@ def validate_transactions(
     )
     transactions["contract_exists"] = transactions["contract"].isin(valid_contracts.index)
     transactions["tick_value_contract"] = transactions["contract"].map(valid_contracts["effective_tick_value"])
-    transactions["notional_mad"] = (
-        transactions["quantity_lots"] * transactions["price_points"] * transactions["tick_value_contract"]
-    )
 
     trade_time_offsets = transactions["trade_time_parsed"].dt.hour.fillna(0) * 3600
     trade_time_offsets += transactions["trade_time_parsed"].dt.minute.fillna(0) * 60
@@ -273,7 +270,7 @@ def validate_transactions(
                     "code": "missing_contract_tick_value",
                     "row": record.row_number,
                     "entity": record.execution_id if pd.notna(record.execution_id) else "",
-                    "message": "Impossible de calculer le notionnel sans tick value contrat.",
+                    "message": "Impossible de valoriser la position sans tick value contrat.",
                 }
             )
 

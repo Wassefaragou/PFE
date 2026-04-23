@@ -62,15 +62,7 @@ excluded_count = (
     if not transactions_validated.empty
     else 0
 )
-official_notional = (
-    float(
-        transactions_validated.loc[
-            transactions_validated["is_official_for_calc"].fillna(False), "notional_mad"
-        ].fillna(0).sum()
-    )
-    if not transactions_validated.empty
-    else 0.0
-)
+official_notional = float(state["global_metrics"].get("total_notional", 0.0))
 
 render_metric_cards(
     [
@@ -80,7 +72,7 @@ render_metric_cards(
         {"label": "Rejetées", "value": str(rejected_count), "glow": "red"},
         {"label": "Exclues du P&L", "value": str(excluded_count), "glow": "purple"},
         {"label": "Lignes invalides", "value": str(invalid_count), "glow": "red"},
-        {"label": "Notionnel confirmé", "value": format_currency(official_notional), "glow": "blue"},
+        {"label": "Notionnel ouvert", "value": format_currency(official_notional), "glow": "blue"},
     ],
     columns=6,
 )
@@ -297,7 +289,6 @@ if not transactions_by_status.empty:
         .agg(
             nb_transactions=("execution_id", "count"),
             quantite_totale=("quantity_lots", "sum"),
-            notionnel_total_mad=("notional_mad", "sum"),
             inclus_pnl_officiel=("is_official_for_calc", "sum"),
         )
     )
@@ -315,7 +306,6 @@ display_columns = [
     "quantity_lots",
     "price_points",
     "status",
-    "notional_mad",
     "is_confirmed",
     "is_valid_for_calc",
     "is_official_for_calc",
@@ -335,7 +325,6 @@ else:
                     "contract": "Contrat",
                     "nb_transactions": "Nb transactions",
                     "quantite_totale": "Quantite totale",
-                    "notionnel_total_mad": "Notionnel total MAD",
                     "inclus_pnl_officiel": "Nb inclus P&L officiel",
                 },
             )

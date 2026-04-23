@@ -72,9 +72,6 @@ else:
             "position_limit_breach",
             "expiry_alert",
         ],
-        label_overrides={
-            "notional_mad": "Exposition ouverte (abs.)",
-        },
     )
 
 render_section_header(
