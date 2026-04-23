@@ -40,6 +40,41 @@ def _side_label_from_position(position: float) -> str:
     return "FLAT"
 
 
+def _replication_side_label_from_position(position: float) -> str:
+    if position > 0:
+        return "SHORT"
+    if position < 0:
+        return "LONG"
+    return "FLAT"
+
+
+def _open_notional_totals_by_future_side(dataframe: pd.DataFrame) -> dict:
+    if dataframe.empty or "notional_mad" not in dataframe.columns:
+        return {
+            "open_notional_futures_long": 0.0,
+            "open_notional_futures_short": 0.0,
+        }
+
+    open_view = dataframe.copy()
+    if "abs_position" in open_view.columns:
+        open_view = open_view.loc[open_view["abs_position"].fillna(0.0) > 0].copy()
+
+    if open_view.empty or "side_label" not in open_view.columns:
+        return {
+            "open_notional_futures_long": 0.0,
+            "open_notional_futures_short": 0.0,
+        }
+
+    return {
+        "open_notional_futures_long": float(
+            open_view.loc[open_view["side_label"] == "LONG", "notional_mad"].sum()
+        ),
+        "open_notional_futures_short": float(
+            open_view.loc[open_view["side_label"] == "SHORT", "notional_mad"].sum()
+        ),
+    }
+
+
 def compute_contract_metrics(
     contracts_df: pd.DataFrame, transactions_df: pd.DataFrame, settings: dict
 ) -> pd.DataFrame:
@@ -51,6 +86,7 @@ def compute_contract_metrics(
                 "underlying_name",
                 "net_position",
                 "side_label",
+                "replication_side_label",
                 "direction",
                 "abs_position",
                 "wap_buys",
@@ -90,6 +126,7 @@ def compute_contract_metrics(
         total_sells_lots = float(sells["quantity_lots"].sum())
         net_position = total_buys_lots - total_sells_lots
         side_label = "LONG" if net_position > 0 else "SHORT" if net_position < 0 else "FLAT"
+        replication_side_label = _replication_side_label_from_position(net_position)
         direction = 1.0 if net_position >= 0 else -1.0
         abs_position = abs(net_position)
         wap_buys = _safe_weighted_average(buys)
@@ -136,6 +173,7 @@ def compute_contract_metrics(
                 "official_net_position": net_position,
                 "net_position": net_position,
                 "side_label": side_label,
+                "replication_side_label": replication_side_label,
                 "direction": direction,
                 "abs_position": abs_position,
                 "wap_buys": wap_buys,
@@ -191,6 +229,7 @@ def compute_global_metrics(contract_metrics_df: pd.DataFrame) -> dict:
             "roi_on_capital_engaged": _safe_ratio(totals["total_management_pnl"], capital_total_engaged),
         }
     )
+    totals.update(_open_notional_totals_by_future_side(contract_metrics_df))
     return totals
 
 
@@ -214,6 +253,7 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
         "difference_vs_wap",
         "within_tolerance",
         "side_label",
+        "replication_side_label",
         "abs_position",
         "notional_mad",
         "margin_mad",
@@ -286,6 +326,7 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
 
     portfolio["abs_position"] = portfolio["cmp_final_position"].abs()
     portfolio["side_label"] = portfolio["cmp_final_position"].map(_side_label_from_position)
+    portfolio["replication_side_label"] = portfolio["cmp_final_position"].map(_replication_side_label_from_position)
     portfolio["notional_mad"] = portfolio["abs_position"] * portfolio["cmp_final_cost"] * portfolio["effective_tick_value"]
     portfolio["margin_mad"] = portfolio["abs_position"] * portfolio["effective_initial_margin_per_lot"]
     portfolio["leverage"] = np.where(
@@ -316,6 +357,7 @@ def compute_cmp_global_metrics(cmp_portfolio_df: pd.DataFrame) -> dict:
             "roi_on_margin": _safe_ratio(totals["total_cmp_pnl"], total_margin),
         }
     )
+    totals.update(_open_notional_totals_by_future_side(cmp_portfolio_df))
     return totals
 
 

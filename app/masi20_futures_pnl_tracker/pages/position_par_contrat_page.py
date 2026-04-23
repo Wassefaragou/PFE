@@ -33,15 +33,15 @@ render_metric_cards(
         {"label": "Contrats ouverts", "value": str(int((contract_metrics['abs_position'] > 0).sum())) if not contract_metrics.empty else "0", "glow": "gold"},
         {"label": "Contrats longs", "value": str(long_count), "glow": "green"},
         {"label": "Contrats shorts", "value": str(short_count), "glow": "purple"},
-        {"label": "P&L économique", "value": format_currency(mgmt_pnl), "glow": "blue"},
-        {"label": "Limites dépassées", "value": str(breach_count), "glow": "red"},
+        {"label": "P&L economique", "value": format_currency(mgmt_pnl), "glow": "blue"},
+        {"label": "Limites depassees", "value": str(breach_count), "glow": "red"},
     ],
     columns=5,
 )
 
 render_section_header(
     "Moteur officiel",
-    "Calcul officiel par contrat base sur l'agregation WAP des achats et des ventes. La page CMP sequentiel presente l'autre methode.",
+    "Calcul officiel par contrat base sur l'agregation WAP des achats et des ventes, avec notionnel absolu et sens inverse de replication.",
     step="01",
     label="Official",
 )
@@ -58,6 +58,7 @@ else:
             "total_sells_lots",
             "net_position",
             "side_label",
+            "replication_side_label",
             "entry_wap",
             "mtm_price",
             "delta_points",
@@ -72,6 +73,9 @@ else:
             "position_limit_breach",
             "expiry_alert",
         ],
+        label_overrides={
+            "notional_mad": "Notionnel abs.",
+        },
     )
 
 render_section_header(

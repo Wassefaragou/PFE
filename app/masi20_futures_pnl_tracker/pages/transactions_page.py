@@ -62,17 +62,19 @@ excluded_count = (
     if not transactions_validated.empty
     else 0
 )
-official_notional = float(state["global_metrics"].get("total_notional", 0.0))
+futures_long_notional = float(state["global_metrics"].get("open_notional_futures_long", 0.0))
+futures_short_notional = float(state["global_metrics"].get("open_notional_futures_short", 0.0))
 
 render_metric_cards(
     [
         {"label": "Transactions", "value": str(len(transactions_raw)), "glow": "gold"},
-        {"label": "Confirmées", "value": str(confirmed_count), "glow": "green"},
+        {"label": "Confirmees", "value": str(confirmed_count), "glow": "green"},
         {"label": "En attente", "value": str(pending_count), "glow": "gold"},
-        {"label": "Rejetées", "value": str(rejected_count), "glow": "red"},
+        {"label": "Rejetees", "value": str(rejected_count), "glow": "red"},
         {"label": "Exclues du P&L", "value": str(excluded_count), "glow": "purple"},
         {"label": "Lignes invalides", "value": str(invalid_count), "glow": "red"},
-        {"label": "Notionnel ouvert", "value": format_currency(official_notional), "glow": "blue"},
+        {"label": "Notionnel futures long", "value": format_currency(futures_long_notional), "glow": "green"},
+        {"label": "Notionnel futures short", "value": format_currency(futures_short_notional), "glow": "purple"},
     ],
     columns=6,
 )
@@ -178,9 +180,9 @@ with tab_import:
             )
             render_metric_cards(
                 [
-                    {"label": "Format détecté", "value": detected_format, "glow": "purple"},
-                    {"label": "Lignes importées", "value": str(len(imported)), "glow": "gold"},
-                    {"label": "Lignes à vérifier", "value": str(missing_required), "glow": "red"},
+                    {"label": "Format detecte", "value": detected_format, "glow": "purple"},
+                    {"label": "Lignes importees", "value": str(len(imported)), "glow": "gold"},
+                    {"label": "Lignes a verifier", "value": str(missing_required), "glow": "red"},
                 ],
                 columns=3,
             )

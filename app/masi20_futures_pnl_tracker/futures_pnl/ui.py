@@ -73,6 +73,7 @@ DISPLAY_LABELS = {
     "net_position": "Pos. nette",
     "delta_vs_all": "Ecart vs officiel",
     "side_label": "Sens",
+    "replication_side_label": "Sens replication",
     "direction": "Direction",
     "abs_position": "Position ouverte",
     "wap_buys": "PRU achats",
@@ -131,6 +132,11 @@ VALUE_LABELS = {
         "SELL": "Vente",
     },
     "side_label": {
+        "LONG": "Long",
+        "SHORT": "Short",
+        "FLAT": "Neutre",
+    },
+    "replication_side_label": {
         "LONG": "Long",
         "SHORT": "Short",
         "FLAT": "Neutre",
@@ -388,7 +394,7 @@ def _style_table_value(value: object, column: str) -> str:
         return palette.get(tone, "color: #cbd5e1;")
     if column == "side_lp":
         return "color: #93c5fd; font-weight: 700;" if str(value).strip().upper() == "BUY" else "color: #fca5a5; font-weight: 700;"
-    if column == "side_label":
+    if column in {"side_label", "replication_side_label"}:
         tone = str(value).strip().upper()
         palette = {
             "LONG": "color: #86efac; font-weight: 700;",

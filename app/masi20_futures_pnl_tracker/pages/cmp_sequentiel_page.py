@@ -32,9 +32,9 @@ cmp_total = float(cmp_summary["cmp_total"].sum()) if not cmp_summary.empty else 
 
 render_metric_cards(
     [
-        {"label": "Contrats testés", "value": str(checked_count), "glow": "gold"},
-        {"label": "Dans la tolérance", "value": str(ok_count), "glow": "green"},
-        {"label": "Écarts", "value": str(mismatch_count), "glow": "red"},
+        {"label": "Contrats testes", "value": str(checked_count), "glow": "gold"},
+        {"label": "Dans la tolerance", "value": str(ok_count), "glow": "green"},
+        {"label": "Ecarts", "value": str(mismatch_count), "glow": "red"},
         {"label": "P&L total sequentiel", "value": format_currency(cmp_total), "glow": "purple"},
     ],
     columns=4,

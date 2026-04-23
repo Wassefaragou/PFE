@@ -1,4 +1,3 @@
-import pandas as pd
 import streamlit as st
 
 from futures_pnl.ui import (
@@ -14,14 +13,6 @@ from futures_pnl.ui import (
     render_sidebar_tools,
     render_status_box,
 )
-
-
-def _official_portfolio_view(contract_metrics: pd.DataFrame) -> pd.DataFrame:
-    if contract_metrics.empty:
-        return contract_metrics
-    return contract_metrics.copy()
-
-
 init_page("Dashboard")
 state = load_app_state()
 render_sidebar_tools(state)
@@ -30,11 +21,11 @@ global_metrics = state["global_metrics"]
 contract_metrics = state["contract_metrics"]
 alerts = state["alerts"]
 
-portfolio_view = _official_portfolio_view(contract_metrics)
+portfolio_view = contract_metrics.copy()
 open_cmp_view = (
     portfolio_view.loc[portfolio_view["abs_position"] > 0].copy()
     if not portfolio_view.empty and "abs_position" in portfolio_view.columns
-    else pd.DataFrame()
+    else portfolio_view.head(0).copy()
 )
 
 render_hero(
@@ -48,7 +39,16 @@ render_metric_cards(
         {"label": "P&L comptable", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
         {"label": "P&L latent", "value": format_currency(global_metrics["total_unrealized_pnl"]), "glow": "blue"},
         {"label": "P&L realise", "value": format_currency(global_metrics["total_realized_pnl"]), "glow": "green"},
-        {"label": "Notionnel", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
+        {
+            "label": "Notionnel futures long",
+            "value": format_currency(global_metrics["open_notional_futures_long"]),
+            "glow": "green",
+        },
+        {
+            "label": "Notionnel futures short",
+            "value": format_currency(global_metrics["open_notional_futures_short"]),
+            "glow": "purple",
+        },
         {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
         {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "Commissions", "value": format_currency(global_metrics["total_commissions"]), "glow": "red"},
@@ -84,7 +84,7 @@ with col_health:
 
 render_section_header(
     "Portefeuille par contrat",
-    "Vue P&L par contrat avec CMP WAP, cours retenu, marge et alertes de limites.",
+    "Vue P&L par contrat avec notionnel absolu et sens oppose a prendre dans le portefeuille de replication.",
     step="02",
     label="Portfolio",
 )
@@ -101,6 +101,7 @@ else:
             "contract_code",
             "underlying_name",
             "side_label",
+            "replication_side_label",
             "abs_position",
             "entry_wap",
             "mtm_price",
@@ -112,6 +113,9 @@ else:
             "position_limit_breach",
             "expiry_alert",
         ],
+        label_overrides={
+            "notional_mad": "Notionnel abs.",
+        },
     )
 
 render_section_header(
@@ -130,6 +134,7 @@ else:
             "contract_code",
             "underlying_name",
             "side_label",
+            "replication_side_label",
             "abs_position",
             "entry_wap",
             "mtm_price",

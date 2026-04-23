@@ -1,4 +1,3 @@
-import pandas as pd
 import streamlit as st
 
 from futures_pnl.ui import (
@@ -14,21 +13,13 @@ from futures_pnl.ui import (
     render_sidebar_tools,
     render_status_box,
 )
-
-
-def _official_portfolio_view(contract_metrics: pd.DataFrame) -> pd.DataFrame:
-    if contract_metrics.empty:
-        return contract_metrics
-    return contract_metrics.copy()
-
-
 init_page("PnL Global")
 state = load_app_state()
 render_sidebar_tools(state)
 
 global_metrics = state["global_metrics"]
 contract_metrics = state["contract_metrics"]
-portfolio_view = _official_portfolio_view(contract_metrics)
+portfolio_view = contract_metrics.copy()
 active_contracts = int((contract_metrics["abs_position"] > 0).sum()) if not contract_metrics.empty else 0
 profitable_contracts = int((contract_metrics["pnl_management_mad"] > 0).sum()) if not contract_metrics.empty else 0
 contracts_with_mtm = int(contract_metrics["mtm_price"].notna().sum()) if not contract_metrics.empty else 0
@@ -45,7 +36,16 @@ render_metric_cards(
         {"label": "P&L realise", "value": format_currency(global_metrics["total_realized_pnl"]), "glow": "green"},
         {"label": "P&L comptable", "value": format_currency(global_metrics["total_accounting_pnl"]), "glow": "purple"},
         {"label": "Commissions", "value": format_currency(global_metrics["total_commissions"]), "glow": "red"},
-        {"label": "Notionnel", "value": format_currency(global_metrics["total_notional"]), "glow": "blue"},
+        {
+            "label": "Notionnel futures long",
+            "value": format_currency(global_metrics["open_notional_futures_long"]),
+            "glow": "green",
+        },
+        {
+            "label": "Notionnel futures short",
+            "value": format_currency(global_metrics["open_notional_futures_short"]),
+            "glow": "purple",
+        },
         {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
         {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "ROI sur marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
@@ -58,7 +58,7 @@ render_metric_cards(
 
 render_section_header(
     "Synthese globale",
-    "Lecture en tables du P&L, du capital engage par contrat et de la disponibilite des cours.",
+    "Lecture en tables du P&L, du capital engage par contrat et du sens oppose a prendre dans le portefeuille de replication.",
     step="01",
     label="Global",
 )
@@ -102,6 +102,7 @@ else:
                 "contract_code",
                 "underlying_name",
                 "side_label",
+                "replication_side_label",
                 "abs_position",
                 "entry_wap",
                 "mtm_price",
@@ -121,6 +122,7 @@ else:
             [
                 "contract_code",
                 "underlying_name",
+                "replication_side_label",
                 "abs_position",
                 "peak_abs_position",
                 "entry_wap",
@@ -133,7 +135,7 @@ else:
             ],
             label_overrides={
                 "entry_wap": "CMP WAP",
-                "notional_mad": "Notionnel",
+                "notional_mad": "Notionnel abs.",
             },
         )
 
@@ -165,7 +167,7 @@ else:
             ],
             label_overrides={
                 "mtm_coverage": "Disponibilite cours",
-                "notional_mad": "Notionnel",
+                "notional_mad": "Notionnel abs.",
             },
         )
 
