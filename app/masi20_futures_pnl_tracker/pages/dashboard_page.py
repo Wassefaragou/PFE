@@ -1,6 +1,12 @@
 import streamlit as st
 
+from futures_pnl.history import (
+    dashboard_state_from_snapshot,
+    get_dashboard_snapshot,
+    upsert_today_dashboard_snapshot,
+)
 from futures_pnl.ui import (
+    DASHBOARD_HISTORY_FILTER_KEY,
     format_currency,
     format_pct,
     init_page,
@@ -14,23 +20,33 @@ from futures_pnl.ui import (
     render_status_box,
 )
 init_page("Dashboard")
-state = load_app_state()
-render_sidebar_tools(state)
+live_state = load_app_state()
+dashboard_history = upsert_today_dashboard_snapshot(live_state)
+preselected_history_date = st.session_state.get(DASHBOARD_HISTORY_FILTER_KEY)
+sidebar_snapshot = get_dashboard_snapshot(dashboard_history, preselected_history_date)
+sidebar_state = dashboard_state_from_snapshot(sidebar_snapshot, live_state)
+selected_history_date = render_sidebar_tools(sidebar_state, dashboard_history=dashboard_history)
+selected_snapshot = get_dashboard_snapshot(dashboard_history, selected_history_date)
+state = dashboard_state_from_snapshot(selected_snapshot, live_state)
 
 global_metrics = state["global_metrics"]
 contract_metrics = state["contract_metrics"]
 alerts = state["alerts"]
+dashboard_history_date = state.get("dashboard_history_date", "")
 
-portfolio_view = contract_metrics.copy()
-open_cmp_view = (
-    portfolio_view.loc[portfolio_view["abs_position"] > 0].copy()
-    if not portfolio_view.empty and "abs_position" in portfolio_view.columns
-    else portfolio_view.head(0).copy()
-)
+portfolio_view = state.get("dashboard_portfolio_view", contract_metrics.copy())
+open_cmp_view = state.get("dashboard_open_cmp_view")
+if open_cmp_view is None:
+    open_cmp_view = (
+        portfolio_view.loc[portfolio_view["abs_position"] > 0].copy()
+        if not portfolio_view.empty and "abs_position" in portfolio_view.columns
+        else portfolio_view.head(0).copy()
+    )
 
 render_hero(
     "Index Futures P&L Tracker",
     "Vue d'ensemble du portefeuille avec le calcul P&L principal du tracker. La page CMP sequentiel presente l'autre methode.",
+    badges=[f"Jour {dashboard_history_date}"] if dashboard_history_date else None,
 )
 
 render_metric_cards(
@@ -48,6 +64,11 @@ render_metric_cards(
             "label": "Notionnel futures short",
             "value": format_currency(global_metrics["open_notional_futures_short"]),
             "glow": "purple",
+        },
+        {
+            "label": "Exposition globale",
+            "value": format_currency(global_metrics.get("global_exposure", 0.0)),
+            "glow": "blue",
         },
         {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
         {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},

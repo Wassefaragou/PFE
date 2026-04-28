@@ -5,6 +5,7 @@ import pandas as pd
 
 from .config import (
     CONTRACT_COLUMNS,
+    DASHBOARD_HISTORY_COLUMNS,
     DAILY_PRICE_COLUMNS,
     TRANSACTION_COLUMNS,
     default_settings,
@@ -17,10 +18,12 @@ SETTINGS_PATH = STORAGE_DIR / "settings.json"
 CONTRACTS_PATH = STORAGE_DIR / "contracts.csv"
 TRANSACTIONS_PATH = STORAGE_DIR / "transactions.csv"
 DAILY_PRICES_PATH = STORAGE_DIR / "daily_prices.csv"
+DASHBOARD_HISTORY_PATH = STORAGE_DIR / "dashboard_history.csv"
 CSV_STORAGE_LAYOUT = (
     (CONTRACTS_PATH, CONTRACT_COLUMNS),
     (TRANSACTIONS_PATH, TRANSACTION_COLUMNS),
     (DAILY_PRICES_PATH, DAILY_PRICE_COLUMNS),
+    (DASHBOARD_HISTORY_PATH, DASHBOARD_HISTORY_COLUMNS),
 )
 
 
@@ -127,9 +130,18 @@ def save_daily_prices(dataframe: pd.DataFrame) -> None:
     _save_csv(DAILY_PRICES_PATH, dataframe, DAILY_PRICE_COLUMNS)
 
 
+def load_dashboard_history() -> pd.DataFrame:
+    return _load_csv(DASHBOARD_HISTORY_PATH, DASHBOARD_HISTORY_COLUMNS)
+
+
+def save_dashboard_history(dataframe: pd.DataFrame) -> None:
+    _save_csv(DASHBOARD_HISTORY_PATH, dataframe, DASHBOARD_HISTORY_COLUMNS)
+
+
 def reset_storage() -> None:
     ensure_storage()
     save_settings(default_settings())
     save_contracts(_empty_frame(CONTRACT_COLUMNS))
     save_transactions(_empty_frame(TRANSACTION_COLUMNS))
     save_daily_prices(_empty_frame(DAILY_PRICE_COLUMNS))
+    save_dashboard_history(_empty_frame(DASHBOARD_HISTORY_COLUMNS))

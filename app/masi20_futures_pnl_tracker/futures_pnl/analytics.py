@@ -230,6 +230,9 @@ def compute_global_metrics(contract_metrics_df: pd.DataFrame) -> dict:
         }
     )
     totals.update(_open_notional_totals_by_future_side(contract_metrics_df))
+    totals["global_exposure"] = (
+        totals["open_notional_futures_long"] + totals["open_notional_futures_short"]
+    )
     return totals
 
 
@@ -358,6 +361,9 @@ def compute_cmp_global_metrics(cmp_portfolio_df: pd.DataFrame) -> dict:
         }
     )
     totals.update(_open_notional_totals_by_future_side(cmp_portfolio_df))
+    totals["global_exposure"] = (
+        totals["open_notional_futures_long"] + totals["open_notional_futures_short"]
+    )
     return totals
 
 
@@ -382,6 +388,37 @@ def build_dashboard_alerts(
                     "message": f"{record.contract_code}: position ouverte sans MtM renseigne.",
                 }
             )
+
+    if not contract_metrics_df.empty and {
+        "contract_code",
+        "expiry_alert",
+        "days_to_expiry",
+        "expiry_date",
+    }.issubset(contract_metrics_df.columns):
+        expiry_watch = contract_metrics_df.loc[
+            contract_metrics_df["expiry_alert"].isin(["Near expiry", "Expired"])
+        ].copy()
+        expiry_watch = expiry_watch.sort_values(["days_to_expiry", "contract_code"], na_position="last")
+        for record in expiry_watch.itertuples():
+            days_to_expiry = pd.to_numeric(record.days_to_expiry, errors="coerce")
+            expiry_date = record.expiry_date if pd.notna(record.expiry_date) else "-"
+            if pd.notna(days_to_expiry) and days_to_expiry < 0:
+                alerts.append(
+                    {
+                        "severity": "error",
+                        "category": "contract_expired",
+                        "message": f"{record.contract_code}: echeance depassee depuis {abs(int(days_to_expiry))} jours ({expiry_date}).",
+                    }
+                )
+            else:
+                days_text = int(days_to_expiry) if pd.notna(days_to_expiry) else "?"
+                alerts.append(
+                    {
+                        "severity": "warning",
+                        "category": "contract_near_expiry",
+                        "message": f"{record.contract_code}: echeance proche dans {days_text} jours ({expiry_date}).",
+                    }
+                )
 
     if not contract_metrics_df.empty and {"position_limit_breach", "contract_code", "abs_position"}.issubset(contract_metrics_df.columns):
         breached_limits = contract_metrics_df.loc[contract_metrics_df["position_limit_breach"].fillna(False)]

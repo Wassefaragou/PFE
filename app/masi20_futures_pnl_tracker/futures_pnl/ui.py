@@ -21,6 +21,7 @@ from .validators import validate_contracts, validate_transactions
 
 STYLE_PATH = Path(__file__).resolve().parents[1] / "style.css"
 NAVIGATION_STATE_KEY = "selected_app"
+DASHBOARD_HISTORY_FILTER_KEY = "dashboard_history_selected_date"
 PAGE_ICON = "https://www.google.com/s2/favicons?domain=attijariwafabank.com&sz=128"
 
 DISPLAY_LABELS = {
@@ -527,8 +528,25 @@ def render_status_box(message: str, kind: str = "info") -> None:
     st.markdown(f'<div class="{kind_class}">{escape(message)}</div>', unsafe_allow_html=True)
 
 
-def render_sidebar_tools(app_state: dict | None = None) -> None:
+def _dashboard_history_options(history_df: pd.DataFrame | None) -> list[str]:
+    if history_df is None or history_df.empty or "date" not in history_df.columns:
+        return []
+    return sorted(history_df["date"].dropna().astype(str).unique().tolist(), reverse=True)
+
+
+def _format_dashboard_history_date(value: str) -> str:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.notna(parsed):
+        return parsed.strftime("%d/%m/%Y")
+    return value
+
+
+def render_sidebar_tools(
+    app_state: dict | None = None,
+    dashboard_history: pd.DataFrame | None = None,
+) -> str | None:
     ensure_storage()
+    selected_history_date = None
     with st.sidebar:
         st.markdown(
             """
@@ -541,6 +559,20 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
             """,
             unsafe_allow_html=True,
         )
+
+        history_options = _dashboard_history_options(dashboard_history)
+        if history_options:
+            current_history_date = st.session_state.get(DASHBOARD_HISTORY_FILTER_KEY)
+            if current_history_date not in history_options:
+                st.session_state[DASHBOARD_HISTORY_FILTER_KEY] = history_options[0]
+
+            st.markdown("##### Historique dashboard")
+            selected_history_date = st.selectbox(
+                "Jour affiche",
+                options=history_options,
+                format_func=_format_dashboard_history_date,
+                key=DASHBOARD_HISTORY_FILTER_KEY,
+            )
 
         if app_state is not None:
             contract_count = len(app_state["contracts_raw"])
@@ -575,6 +607,8 @@ def render_sidebar_tools(app_state: dict | None = None) -> None:
         if st.button("Reinitialiser les donnees locales", width="stretch"):
             reset_storage()
             st.rerun()
+
+    return selected_history_date
 
 
 def show_issues(title: str, issues_df: pd.DataFrame) -> None:

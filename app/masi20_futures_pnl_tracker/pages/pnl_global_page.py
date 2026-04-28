@@ -46,6 +46,11 @@ render_metric_cards(
             "value": format_currency(global_metrics["open_notional_futures_short"]),
             "glow": "purple",
         },
+        {
+            "label": "Exposition globale",
+            "value": format_currency(global_metrics.get("global_exposure", 0.0)),
+            "glow": "blue",
+        },
         {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
         {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "ROI sur marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},

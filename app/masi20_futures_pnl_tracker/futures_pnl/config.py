@@ -36,6 +36,33 @@ DAILY_PRICE_COLUMNS = [
     "settlement_price_points",
 ]
 
+DASHBOARD_HISTORY_COLUMNS = [
+    "date",
+    "updated_at",
+    "total_management_pnl",
+    "total_accounting_pnl",
+    "total_unrealized_pnl",
+    "total_realized_pnl",
+    "total_commissions",
+    "open_notional_futures_long",
+    "open_notional_futures_short",
+    "global_exposure",
+    "total_notional",
+    "total_margin",
+    "global_leverage",
+    "roi_on_margin",
+    "capital_total_engaged",
+    "roi_on_capital_engaged",
+    "contract_count",
+    "transaction_count",
+    "open_contract_count",
+    "global_metrics_json",
+    "alerts_json",
+    "portfolio_json",
+    "open_cmp_json",
+    "confirmed_positions_json",
+]
+
 DEFAULT_SETTINGS = {
     "default_tick_value": None,
     "commission_bvc_rt": None,
