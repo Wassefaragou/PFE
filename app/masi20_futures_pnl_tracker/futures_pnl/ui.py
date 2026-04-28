@@ -1,7 +1,6 @@
 from html import escape
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -9,7 +8,6 @@ from .analytics import (
     build_dashboard_alerts,
     build_cmp_portfolio_view,
     compute_cmp_sequential,
-    compute_cmp_global_metrics,
     compute_confirmed_positions,
     compute_contract_metrics,
     compute_global_metrics,
@@ -33,7 +31,6 @@ DISPLAY_LABELS = {
     "entity": "Element",
     "message": "Message",
     "default_tick_value": "Tick global",
-    "default_initial_margin_per_lot": "Marge init./lot globale",
     "commission_bvc_rt": "Commission BVC AR",
     "commission_broker_rt": "Commission broker AR",
     "commission_sgmat_rt": "Commission SGMAT AR",
@@ -42,14 +39,12 @@ DISPLAY_LABELS = {
     "underlying_name": "Sous-jacent",
     "expiry_date": "Echeance",
     "tick_value": "Tick",
-    "initial_margin_per_lot": "Marge init./lot",
-    "settlement_price_points": "Cours valorisation",
+    "settlement_price_points": "Cours de reference",
     "position_limit_per_contract": "Limite pos.",
     "comments": "Commentaire",
     "effective_tick_value": "Tick effectif",
-    "effective_initial_margin_per_lot": "Marge effect.",
     "effective_position_limit_per_contract": "Limite effect.",
-    "mtm_price": "Cours retenu",
+    "mtm_price": "Cours de reference",
     "mtm_source": "Source cours",
     "days_to_expiry": "Jours restants",
     "expiry_alert": "Alerte echeance",
@@ -79,46 +74,39 @@ DISPLAY_LABELS = {
     "abs_position": "Position ouverte",
     "wap_buys": "PRU achats",
     "wap_sells": "PRU ventes",
-    "entry_wap": "CMP WAP",
-    "delta_points": "Ecart cours/CMP WAP",
+    "entry_wap": "CMP sequentiel",
+    "delta_points": "L'ecart",
     "pnl_unrealized_mad": "P&L latent",
     "matched_qty": "Quantite cloturee",
-    "pnl_realized_mad": "P&L réalisé",
+    "pnl_realized_mad": "P&L realise",
     "pnl_accounting_mad": "P&L comptable",
     "commissions_mad": "Commissions",
-    "pnl_management_mad": "P&L économique",
-    "margin_mad": "Marge mobilisée",
-    "leverage": "Effet de levier",
-    "position_limit_breach": "Limite dépassée",
-    "cmp_realized_total": "CMP réalisé",
+    "pnl_management_mad": "P&L economique",
+    "position_limit_breach": "Limite depassee",
+    "cmp_realized_total": "P&L realise sequentiel",
     "cmp_final_position": "Position finale",
     "cmp_final_cost": "CMP sequentiel",
     "cmp_unrealized": "P&L latent sequentiel",
     "cmp_total": "P&L total sequentiel",
-    "wap_accounting_total": "P&L total WAP",
-    "difference_vs_wap": "Ecart vs WAP",
-    "within_tolerance": "Tol. OK",
     "signed_qty": "Quantite signee",
     "pos_before": "Position avant",
     "cmp_before": "CMP seq avant",
     "closed_qty": "Quantite cloturee",
-    "trade_realized_pnl": "P&L réalisé trade",
-    "pos_after": "Position après",
-    "cmp_after": "CMP après trade",
+    "trade_realized_pnl": "P&L realise trade",
+    "pos_after": "Position apres",
+    "cmp_after": "CMP apres trade",
     "date": "Date",
     "contract_count": "Nb contrats",
     "nb_transactions": "Nb transactions",
-    "quantite_totale": "Quantité totale",
+    "quantite_totale": "Quantite totale",
     "inclus_pnl_officiel": "Nb inclus P&L officiel",
     "daily_delta": "Delta jour",
     "daily_variation_mad": "Var. jour MAD",
     "total_daily_variation": "Variation totale",
-    "cumulative_margin_pnl": "Cumul marge",
     "round_trip_fee_per_lot": "Frais AR / lot",
     "is_valid": "Ligne valide",
     "chrono_key": "Cle chrono",
     "peak_abs_position": "Pic de position",
-    "capital_engaged_mad": "Capital engage",
 }
 
 VALUE_LABELS = {
@@ -168,7 +156,7 @@ VALUE_LABELS = {
     },
 }
 
-POSITIVE_FLAG_COLUMNS = {"is_confirmed", "is_valid_for_calc", "is_official_for_calc", "within_tolerance"}
+POSITIVE_FLAG_COLUMNS = {"is_confirmed", "is_valid_for_calc", "is_official_for_calc"}
 NEGATIVE_FLAG_COLUMNS = {"position_limit_breach"}
 BOOLEAN_COLUMNS = POSITIVE_FLAG_COLUMNS | NEGATIVE_FLAG_COLUMNS | {
     "is_valid",
@@ -180,19 +168,13 @@ MONEY_COLUMNS = {
     "pnl_accounting_mad",
     "commissions_mad",
     "pnl_management_mad",
-    "margin_mad",
     "cmp_realized_total",
     "cmp_unrealized",
     "cmp_total",
-    "wap_accounting_total",
     "trade_realized_pnl",
     "daily_variation_mad",
     "total_daily_variation",
-    "cumulative_margin_pnl",
-    "effective_initial_margin_per_lot",
-    "initial_margin_per_lot",
     "round_trip_fee_per_lot",
-    "capital_engaged_mad",
 }
 POINT_COLUMNS = {
     "settlement_price_points",
@@ -233,7 +215,7 @@ QUANTITY_COLUMNS = {
     "contract_count",
     "peak_abs_position",
 }
-RATIO_COLUMNS = {"leverage"}
+RATIO_COLUMNS = set()
 
 
 @st.cache_data(show_spinner=False)
@@ -263,13 +245,6 @@ def init_page(page_title: str) -> None:
 
 def format_currency(value: float) -> str:
     return f"{value:,.2f} MAD"
-
-
-def format_pct(value: float) -> str:
-    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(numeric_value) or not np.isfinite(float(numeric_value)):
-        return "-"
-    return f"{float(numeric_value):.2%}"
 
 
 def format_number(value: float) -> str:
@@ -514,10 +489,6 @@ def render_form_group(title: str, subtitle: str = "") -> None:
     )
 
 
-def render_micro_note(title: str, body: str, tone: str = "info") -> None:
-    return
-
-
 def render_status_box(message: str, kind: str = "info") -> None:
     kind_class = {
         "info": "alert-info",
@@ -698,19 +669,18 @@ def append_dataframe_rows(
 def load_app_state() -> dict:
     ensure_storage()
     settings = load_settings()
-    legacy_default_margin = pd.to_numeric(settings.get("default_initial_margin_per_lot"), errors="coerce")
-    contracts_raw = load_contracts(fallback_initial_margin_per_lot=legacy_default_margin)
+    contracts_raw = load_contracts()
     transactions_raw = load_transactions()
 
     contracts_validated, contract_issues = validate_contracts(contracts_raw, settings)
     contracts_ready = prepare_contracts_for_valuation(contracts_validated)
     transactions_validated, transaction_issues = validate_transactions(transactions_raw, contracts_ready)
-    contract_metrics = compute_contract_metrics(contracts_ready, transactions_validated, settings)
+    reference_contract_metrics = compute_contract_metrics(contracts_ready, transactions_validated, settings)
+    cmp_detail, cmp_summary = compute_cmp_sequential(transactions_validated, reference_contract_metrics)
+    cmp_portfolio = build_cmp_portfolio_view(reference_contract_metrics, cmp_summary)
+    contract_metrics = cmp_portfolio
     confirmed_positions = compute_confirmed_positions(transactions_validated, contract_metrics)
-    cmp_detail, cmp_summary = compute_cmp_sequential(transactions_validated, contract_metrics)
-    cmp_portfolio = build_cmp_portfolio_view(contract_metrics, cmp_summary)
     global_metrics = compute_global_metrics(contract_metrics)
-    cmp_global_metrics = compute_cmp_global_metrics(cmp_portfolio)
     alerts = build_dashboard_alerts(
         contracts_ready,
         contract_issues,
@@ -734,6 +704,5 @@ def load_app_state() -> dict:
         "cmp_summary": cmp_summary,
         "cmp_portfolio": cmp_portfolio,
         "global_metrics": global_metrics,
-        "cmp_global_metrics": cmp_global_metrics,
         "alerts": alerts,
     }

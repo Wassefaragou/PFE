@@ -121,15 +121,16 @@ if editor_source.empty:
 
 editor_columns = [
     "expiry_date",
-    "initial_margin_per_lot",
     "settlement_price_points",
     "comments",
 ]
 editor_input = editor_source[editor_columns].copy()
 editor_input["expiry_date"] = editor_input["expiry_date"].map(_expiry_selection_label)
 editor_input["comments"] = editor_input["comments"].fillna("").astype(str)
-editor_input["initial_margin_per_lot"] = pd.to_numeric(editor_input["initial_margin_per_lot"], errors="coerce")
-editor_input["settlement_price_points"] = pd.to_numeric(editor_input["settlement_price_points"], errors="coerce")
+editor_input["settlement_price_points"] = pd.to_numeric(
+    editor_input["settlement_price_points"],
+    errors="coerce",
+).astype("float64")
 
 upcoming_contracts = upcoming_contract_schedule(reference_date=reference_date, contract_count=5)
 upcoming_expiry_dates = [contract["expiry_date"] for contract in upcoming_contracts]
@@ -166,15 +167,12 @@ edited_contracts = st.data_editor(
             options=expiry_options,
             required=False,
         ),
-        "initial_margin_per_lot": st.column_config.NumberColumn(
-            label_for("initial_margin_per_lot"),
-            format="%.2f",
-            help="Marge initiale requise par lot pour ce contrat.",
-        ),
         "settlement_price_points": st.column_config.NumberColumn(
             label_for("settlement_price_points"),
             format="%.4f",
-            help="Cours de valorisation utilise pour le suivi quotidien.",
+            min_value=0.0,
+            step=0.01,
+            help="Cours de reference au format decimal, par exemple 1368.50.",
         ),
         "comments": st.column_config.TextColumn(label_for("comments")),
     },
@@ -184,6 +182,10 @@ editor_preview_input = edited_contracts.copy()
 editor_preview_input["expiry_date"] = editor_preview_input["expiry_date"].map(
     lambda value: expiry_option_map.get(str(value).strip(), "")
 )
+editor_preview_input["settlement_price_points"] = pd.to_numeric(
+    editor_preview_input["settlement_price_points"],
+    errors="coerce",
+).astype("float64")
 editor_preview = clear_contract_overrides(enrich_contract_reference(editor_preview_input, force_contract_code=True))
 
 if st.button("Enregistrer le referentiel", width="stretch"):
@@ -193,7 +195,7 @@ if st.button("Enregistrer le referentiel", width="stretch"):
 
 render_section_header(
     "Controle du referentiel",
-    "Validation des lignes et apercu du cours retenu par contrat.",
+    "Validation des lignes et apercu du cours de reference par contrat.",
     step="02",
     label="Controles",
 )
@@ -202,7 +204,6 @@ show_issues("Validation des contrats", contract_issues)
 display_columns = [
     "contract_code",
     "expiry_date",
-    "initial_margin_per_lot",
     "settlement_price_points",
     "effective_tick_value",
     "expiry_alert",

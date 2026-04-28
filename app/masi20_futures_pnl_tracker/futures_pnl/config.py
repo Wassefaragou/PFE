@@ -3,7 +3,6 @@ from datetime import date
 
 APP_TITLE = "MASI20 Futures PnL Tracker"
 NEAR_EXPIRY_DAYS = 10
-CMP_TOLERANCE = 1e-6
 FIXED_UNDERLYING_NAME = "MASI20"
 
 CONTRACT_COLUMNS = [
@@ -11,7 +10,6 @@ CONTRACT_COLUMNS = [
     "underlying_name",
     "expiry_date",
     "tick_value",
-    "initial_margin_per_lot",
     "settlement_price_points",
     "position_limit_per_contract",
     "comments",
@@ -48,11 +46,6 @@ DASHBOARD_HISTORY_COLUMNS = [
     "open_notional_futures_short",
     "global_exposure",
     "total_notional",
-    "total_margin",
-    "global_leverage",
-    "roi_on_margin",
-    "capital_total_engaged",
-    "roi_on_capital_engaged",
     "contract_count",
     "transaction_count",
     "open_contract_count",

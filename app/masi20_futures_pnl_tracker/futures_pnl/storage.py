@@ -91,19 +91,8 @@ def save_settings(settings: dict) -> None:
         json.dump(merged, handle, indent=2)
 
 
-def load_contracts(*, fallback_initial_margin_per_lot: float | None = None) -> pd.DataFrame:
-    contracts = clear_contract_overrides(enrich_contract_reference(_load_csv(CONTRACTS_PATH, CONTRACT_COLUMNS)))
-    if "initial_margin_per_lot" not in contracts.columns:
-        return contracts
-
-    fallback_margin = pd.to_numeric(pd.Series([fallback_initial_margin_per_lot]), errors="coerce").iloc[0]
-    if pd.notna(fallback_margin):
-        current_margin = pd.to_numeric(contracts["initial_margin_per_lot"], errors="coerce")
-        missing_margin = current_margin.isna()
-        contracts["initial_margin_per_lot"] = current_margin.fillna(float(fallback_margin))
-        if missing_margin.any():
-            save_contracts(contracts)
-    return contracts
+def load_contracts() -> pd.DataFrame:
+    return clear_contract_overrides(enrich_contract_reference(_load_csv(CONTRACTS_PATH, CONTRACT_COLUMNS)))
 
 
 def save_contracts(dataframe: pd.DataFrame) -> None:

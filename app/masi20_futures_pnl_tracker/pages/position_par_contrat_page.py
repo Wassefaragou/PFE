@@ -20,7 +20,7 @@ confirmed_positions = state["confirmed_positions"]
 
 render_hero(
     "Position par contrat",
-    "Vue officielle du portefeuille par contrat, avec une lecture informative des seuls trades confirmes.",
+    "Vue officielle du portefeuille par contrat en CMP sequentiel, avec une lecture informative des seuls trades confirmes.",
 )
 
 long_count = int((contract_metrics["net_position"] > 0).sum()) if not contract_metrics.empty else 0
@@ -40,8 +40,8 @@ render_metric_cards(
 )
 
 render_section_header(
-    "Moteur officiel",
-    "Calcul officiel par contrat base sur l'agregation WAP des achats et des ventes, avec notionnel absolu et sens inverse de replication.",
+    "Moteur officiel sequentiel",
+    "Calcul officiel par contrat traite trade par trade, avec notionnel absolu et sens inverse de replication.",
     step="01",
     label="Official",
 )
@@ -59,21 +59,23 @@ else:
             "net_position",
             "side_label",
             "replication_side_label",
-            "entry_wap",
+            "cmp_final_cost",
             "mtm_price",
             "delta_points",
-            "pnl_unrealized_mad",
-            "pnl_realized_mad",
-            "pnl_accounting_mad",
+            "cmp_unrealized",
+            "cmp_realized_total",
+            "cmp_total",
             "commissions_mad",
             "pnl_management_mad",
             "notional_mad",
-            "margin_mad",
-            "leverage",
             "position_limit_breach",
             "expiry_alert",
         ],
         label_overrides={
+            "cmp_final_cost": "CMP sequentiel",
+            "cmp_unrealized": "P&L latent sequentiel",
+            "cmp_realized_total": "P&L realise sequentiel",
+            "cmp_total": "P&L total sequentiel",
             "notional_mad": "Notionnel abs.",
         },
     )

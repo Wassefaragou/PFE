@@ -2,7 +2,6 @@ import streamlit as st
 
 from futures_pnl.ui import (
     format_currency,
-    format_pct,
     init_page,
     load_app_state,
     render_data_table,
@@ -26,7 +25,7 @@ contracts_with_mtm = int(contract_metrics["mtm_price"].notna().sum()) if not con
 
 render_hero(
     "PnL global",
-    "Vue de pilotage du portefeuille en methode WAP. La page CMP sequentiel presente l'autre methode de calcul.",
+    "Vue de pilotage du portefeuille en methode CMP sequentiel.",
 )
 
 render_metric_cards(
@@ -51,9 +50,6 @@ render_metric_cards(
             "value": format_currency(global_metrics.get("global_exposure", 0.0)),
             "glow": "blue",
         },
-        {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
-        {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
-        {"label": "ROI sur marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
         {"label": "Contrats ouverts", "value": str(active_contracts), "glow": "purple"},
         {"label": "Contrats en gain", "value": str(profitable_contracts), "glow": "green"},
         {"label": "Contrats avec cours", "value": str(contracts_with_mtm), "glow": "blue"},
@@ -63,7 +59,7 @@ render_metric_cards(
 
 render_section_header(
     "Synthese globale",
-    "Lecture en tables du P&L, du capital engage par contrat et du sens oppose a prendre dans le portefeuille de replication.",
+    "Lecture en tables du P&L sequentiel et du sens oppose a prendre dans le portefeuille de replication.",
     step="01",
     label="Global",
 )
@@ -75,7 +71,6 @@ else:
     ordered_portfolio = portfolio_view.sort_values("pnl_management_mad", ascending=False).reset_index(drop=True)
     winner = ordered_metrics.iloc[0]
     loser = ordered_metrics.sort_values("pnl_management_mad", ascending=True).iloc[0]
-    levered = ordered_metrics.sort_values("leverage", ascending=False).iloc[0]
 
     render_metric_cards(
         [
@@ -89,16 +84,11 @@ else:
                 "value": format_currency(float(loser["pnl_management_mad"])),
                 "glow": "red",
             },
-            {
-                "label": f"Levier max - {levered['contract_code']}",
-                "value": f"{float(levered['leverage']):.2f}x",
-                "glow": "purple",
-            },
         ],
-        columns=3,
+        columns=2,
     )
 
-    portfolio_tab, capital_tab, mtm_tab = st.tabs(["Portefeuille", "Capital", "Disponibilite cours"])
+    portfolio_tab, notional_tab, mtm_tab = st.tabs(["Portefeuille", "Notionnel", "Disponibilite cours"])
 
     with portfolio_tab:
         render_data_table(
@@ -109,37 +99,31 @@ else:
                 "side_label",
                 "replication_side_label",
                 "abs_position",
-                "entry_wap",
+                "cmp_final_cost",
                 "mtm_price",
-                "pnl_unrealized_mad",
-                "pnl_realized_mad",
+                "cmp_unrealized",
+                "cmp_realized_total",
                 "commissions_mad",
                 "pnl_management_mad",
-                "margin_mad",
-                "leverage",
                 "expiry_alert",
             ],
         )
 
-    with capital_tab:
+    with notional_tab:
         render_data_table(
-            ordered_portfolio.sort_values(["capital_engaged_mad", "contract_code"], ascending=[False, True]),
+            ordered_portfolio.sort_values(["notional_mad", "contract_code"], ascending=[False, True]),
             [
                 "contract_code",
                 "underlying_name",
                 "replication_side_label",
                 "abs_position",
-                "peak_abs_position",
-                "entry_wap",
-                "margin_mad",
-                "capital_engaged_mad",
+                "cmp_final_cost",
                 "notional_mad",
-                "leverage",
                 "position_limit_breach",
                 "expiry_alert",
             ],
             label_overrides={
-                "entry_wap": "CMP WAP",
+                "cmp_final_cost": "CMP sequentiel",
                 "notional_mad": "Notionnel abs.",
             },
         )
@@ -155,7 +139,6 @@ else:
                 contract_count=("contract_code", "nunique"),
                 abs_position=("abs_position", "sum"),
                 notional_mad=("notional_mad", "sum"),
-                margin_mad=("margin_mad", "sum"),
                 pnl_management_mad=("pnl_management_mad", "sum"),
             )
             .sort_values(["contract_count", "pnl_management_mad"], ascending=[False, False])
@@ -167,7 +150,6 @@ else:
                 "contract_count",
                 "abs_position",
                 "notional_mad",
-                "margin_mad",
                 "pnl_management_mad",
             ],
             label_overrides={

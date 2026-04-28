@@ -59,7 +59,7 @@ def validate_contracts(contracts_df: pd.DataFrame, settings: dict) -> tuple[pd.D
     contracts["expiry_date"] = contracts["expiry_date_parsed"].dt.strftime("%Y-%m-%d")
     contracts.loc[contracts["expiry_date_parsed"].isna(), "expiry_date"] = pd.NA
 
-    numeric_columns = ["initial_margin_per_lot", "settlement_price_points"]
+    numeric_columns = ["settlement_price_points"]
     for column in numeric_columns:
         contracts[column] = pd.to_numeric(contracts[column], errors="coerce")
 
@@ -106,12 +106,6 @@ def validate_contracts(contracts_df: pd.DataFrame, settings: dict) -> tuple[pd.D
             )
 
     contracts["effective_tick_value"] = pd.to_numeric(settings.get("default_tick_value"), errors="coerce")
-    contracts["effective_initial_margin_per_lot"] = pd.to_numeric(contracts["initial_margin_per_lot"], errors="coerce")
-    legacy_default_margin = pd.to_numeric(settings.get("default_initial_margin_per_lot"), errors="coerce")
-    if pd.notna(legacy_default_margin):
-        contracts["effective_initial_margin_per_lot"] = contracts["effective_initial_margin_per_lot"].fillna(
-            float(legacy_default_margin)
-        )
     contracts["effective_position_limit_per_contract"] = pd.to_numeric(
         settings.get("default_position_limit_per_contract"), errors="coerce"
     )
@@ -127,17 +121,6 @@ def validate_contracts(contracts_df: pd.DataFrame, settings: dict) -> tuple[pd.D
                     "message": "Aucun tick global valide dans les parametres.",
                 }
             )
-        if pd.isna(record.effective_initial_margin_per_lot) or record.effective_initial_margin_per_lot <= 0:
-            issues.append(
-                {
-                    "severity": "error",
-                    "code": "invalid_initial_margin_per_lot",
-                    "row": record.row_number,
-                    "entity": record.contract_code if pd.notna(record.contract_code) else "",
-                    "message": "initial_margin_per_lot doit etre renseigne et strictement positif pour chaque contrat.",
-                }
-            )
-
     issue_rows = {issue["row"] for issue in issues if issue["severity"] == "error"}
     contracts["is_valid"] = ~contracts["row_number"].isin(issue_rows)
     return contracts, _issues_to_dataframe(issues)

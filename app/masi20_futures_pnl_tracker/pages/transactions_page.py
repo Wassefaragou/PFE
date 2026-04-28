@@ -17,7 +17,6 @@ from futures_pnl.ui import (
     render_form_group,
     render_hero,
     render_metric_cards,
-    render_micro_note,
     render_section_header,
     render_sidebar_tools,
     show_issues,
@@ -152,11 +151,6 @@ with tab_manual:
         st.rerun()
 
 with tab_import:
-    render_micro_note(
-        "Formats acceptes",
-        "L'import supporte soit le registre interne, soit l'export broker de type Symbol / Side / Executed Size / Average Price / Execution ID / Transact Time. Le statut est force a CONFIRME pour ce format.",
-        tone="info",
-    )
     uploaded_file = st.file_uploader("Importer un CSV transactions", type=["csv"])
     if uploaded_file is not None:
         try:

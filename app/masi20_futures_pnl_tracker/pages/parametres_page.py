@@ -12,7 +12,6 @@ from futures_pnl.ui import (
     render_form_group,
     render_hero,
     render_metric_cards,
-    render_micro_note,
     render_section_header,
     render_sidebar_tools,
 )
@@ -43,7 +42,7 @@ default_position_limit_value = _optional_number(settings.get("default_position_l
 
 render_hero(
     "Parametres globaux",
-    "Parametres globaux de tick, de frais et de limites. Les cours de valorisation se renseignent contrat par contrat dans le referentiel.",
+    "Parametres globaux de tick, de frais et de limites. Les cours de reference se renseignent contrat par contrat dans le referentiel.",
 )
 
 render_metric_cards(
@@ -71,15 +70,9 @@ render_metric_cards(
 
 render_section_header(
     "Modifier les parametres",
-    "Configuration globale hors cours de valorisation.",
+    "Configuration globale hors cours de reference.",
     step="01",
     label="Configuration",
-)
-
-render_micro_note(
-    "Cours de valorisation",
-    "Les cours de valorisation ne sont plus saisis ici. Ils se renseignent directement dans le referentiel contrats, ligne par ligne.",
-    tone="info",
 )
 
 with st.form("settings_form"):
@@ -91,7 +84,7 @@ with st.form("settings_form"):
         placeholder="Ex: 10.00",
     )
 
-    render_form_group("Bloc frais", "Frais aller-retour utilisés dans le P&L économique.")
+    render_form_group("Bloc frais", "Frais aller-retour utilises dans le P&L economique.")
     col1, col2, col3 = st.columns(3)
     commission_bvc_rt = col1.number_input(
         "Commission BVC AR",

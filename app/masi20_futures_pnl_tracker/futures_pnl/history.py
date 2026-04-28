@@ -19,11 +19,6 @@ DASHBOARD_GLOBAL_METRIC_KEYS = [
     "open_notional_futures_short",
     "global_exposure",
     "total_notional",
-    "total_margin",
-    "global_leverage",
-    "roi_on_margin",
-    "capital_total_engaged",
-    "roi_on_capital_engaged",
 ]
 
 

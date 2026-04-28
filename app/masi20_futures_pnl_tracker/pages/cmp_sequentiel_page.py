@@ -19,52 +19,44 @@ render_sidebar_tools(state)
 
 cmp_summary = state["cmp_summary"]
 cmp_detail = state["cmp_detail"]
+contract_metrics = state["contract_metrics"]
 
 render_hero(
     "CMP sequentiel",
-    "Methode alternative de calcul CMP, traitee trade par trade et comparee au moteur WAP.",
+    "Methode officielle de calcul CMP, traitee trade par trade.",
 )
 
 checked_count = len(cmp_summary)
-ok_count = int(cmp_summary["within_tolerance"].fillna(False).sum()) if not cmp_summary.empty else 0
-mismatch_count = checked_count - ok_count
+open_count = int((contract_metrics["abs_position"] > 0).sum()) if not contract_metrics.empty else 0
+cmp_realized = float(cmp_summary["cmp_realized_total"].sum()) if not cmp_summary.empty else 0.0
+cmp_unrealized = float(cmp_summary["cmp_unrealized"].sum()) if not cmp_summary.empty else 0.0
 cmp_total = float(cmp_summary["cmp_total"].sum()) if not cmp_summary.empty else 0.0
 
 render_metric_cards(
     [
-        {"label": "Contrats testes", "value": str(checked_count), "glow": "gold"},
-        {"label": "Dans la tolerance", "value": str(ok_count), "glow": "green"},
-        {"label": "Ecarts", "value": str(mismatch_count), "glow": "red"},
+        {"label": "Contrats calcules", "value": str(checked_count), "glow": "gold"},
+        {"label": "Contrats ouverts", "value": str(open_count), "glow": "green"},
+        {"label": "P&L realise sequentiel", "value": format_currency(cmp_realized), "glow": "blue"},
+        {"label": "P&L latent sequentiel", "value": format_currency(cmp_unrealized), "glow": "green"},
         {"label": "P&L total sequentiel", "value": format_currency(cmp_total), "glow": "purple"},
     ],
-    columns=4,
+    columns=5,
 )
 
 render_section_header(
-    "Comparaison des deux methodes",
-    "Verification du total sequentiel contre le total WAP, contrat par contrat.",
+    "Synthese sequentielle",
+    "Position finale, CMP final et P&L calcule trade par trade.",
     step="01",
-    label="Comparaison",
+    label="CMP",
 )
 
 if cmp_summary.empty:
     render_status_box("Aucun resultat CMP disponible.", kind="info")
 else:
-    if mismatch_count == 0:
-        render_status_box(
-            "Les deux methodes concordent sur le total P&L dans la tolerance.",
-            kind="success",
-        )
-    else:
-        render_status_box(
-            "Certains contrats divergent entre la methode sequentielle et la methode WAP.",
-            kind="error",
-        )
-
     ordered_summary = (
-        cmp_summary.assign(abs_difference_vs_wap=cmp_summary["difference_vs_wap"].abs())
-        .sort_values(["abs_difference_vs_wap", "contract_code"], ascending=[False, True])
-        .drop(columns=["abs_difference_vs_wap"])
+        cmp_summary.assign(abs_cmp_total=cmp_summary["cmp_total"].abs())
+        .sort_values(["abs_cmp_total", "contract_code"], ascending=[False, True])
+        .drop(columns=["abs_cmp_total"])
     )
 
     render_data_table(
@@ -76,16 +68,12 @@ else:
             "cmp_realized_total",
             "cmp_unrealized",
             "cmp_total",
-            "wap_accounting_total",
-            "difference_vs_wap",
-            "within_tolerance",
         ],
         label_overrides={
             "cmp_realized_total": "P&L realise sequentiel",
             "cmp_final_cost": "CMP sequentiel",
             "cmp_unrealized": "P&L latent sequentiel",
             "cmp_total": "P&L total sequentiel",
-            "wap_accounting_total": "P&L total WAP",
         },
     )
 

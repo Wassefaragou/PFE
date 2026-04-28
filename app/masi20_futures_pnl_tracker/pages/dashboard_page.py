@@ -8,7 +8,6 @@ from futures_pnl.history import (
 from futures_pnl.ui import (
     DASHBOARD_HISTORY_FILTER_KEY,
     format_currency,
-    format_pct,
     init_page,
     load_app_state,
     render_data_table,
@@ -45,7 +44,7 @@ if open_cmp_view is None:
 
 render_hero(
     "Index Futures P&L Tracker",
-    "Vue d'ensemble du portefeuille avec le calcul P&L principal du tracker. La page CMP sequentiel presente l'autre methode.",
+    "Vue d'ensemble du portefeuille avec le calcul P&L principal en CMP sequentiel.",
     badges=[f"Jour {dashboard_history_date}"] if dashboard_history_date else None,
 )
 
@@ -70,10 +69,7 @@ render_metric_cards(
             "value": format_currency(global_metrics.get("global_exposure", 0.0)),
             "glow": "blue",
         },
-        {"label": "Marge mobilisee", "value": format_currency(global_metrics["total_margin"]), "glow": "pink"},
-        {"label": "Levier global", "value": f"{global_metrics['global_leverage']:.2f}x", "glow": "gold"},
         {"label": "Commissions", "value": format_currency(global_metrics["total_commissions"]), "glow": "red"},
-        {"label": "ROI sur marge", "value": format_pct(global_metrics["roi_on_margin"]), "glow": "green"},
     ],
     columns=5,
 )
@@ -105,7 +101,7 @@ with col_health:
 
 render_section_header(
     "Portefeuille par contrat",
-    "Vue P&L par contrat avec notionnel absolu et sens oppose a prendre dans le portefeuille de replication.",
+    "Vue P&L par contrat en methode sequentielle, avec notionnel absolu et sens oppose a prendre dans le portefeuille de replication.",
     step="02",
     label="Portfolio",
 )
@@ -124,12 +120,11 @@ else:
             "side_label",
             "replication_side_label",
             "abs_position",
-            "entry_wap",
+            "cmp_final_cost",
             "mtm_price",
-            "pnl_unrealized_mad",
-            "pnl_realized_mad",
+            "cmp_unrealized",
+            "cmp_realized_total",
             "pnl_management_mad",
-            "margin_mad",
             "notional_mad",
             "position_limit_breach",
             "expiry_alert",
@@ -140,10 +135,10 @@ else:
     )
 
 render_section_header(
-    "CMP WAP par contrat",
-    "Lecture rapide du CMP WAP sur les positions ouvertes. La methode sequentielle reste sur sa page dediee.",
+    "CMP sequentiel par contrat",
+    "Lecture rapide du CMP sequentiel sur les positions ouvertes.",
     step="03",
-    label="WAP",
+    label="CMP",
 )
 
 if open_cmp_view.empty:
@@ -157,14 +152,14 @@ else:
             "side_label",
             "replication_side_label",
             "abs_position",
-            "entry_wap",
+            "cmp_final_cost",
             "mtm_price",
             "delta_points",
             "expiry_alert",
         ],
         label_overrides={
             "abs_position": "Position",
-            "delta_points": "Ecart cours/CMP WAP",
+            "delta_points": "L'ecart",
         },
     )
 

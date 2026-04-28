@@ -1,8 +1,6 @@
 import numpy as np
 import pandas as pd
 
-from .config import CMP_TOLERANCE
-
 
 def _safe_weighted_average(dataframe: pd.DataFrame) -> float:
     if dataframe.empty:
@@ -26,10 +24,6 @@ def _peak_abs_position_from_trades(dataframe: pd.DataFrame) -> float:
     if cumulative_position.empty:
         return 0.0
     return float(cumulative_position.abs().max())
-
-
-def _safe_ratio(numerator: float, denominator: float) -> float:
-    return float(numerator / denominator) if denominator else np.nan
 
 
 def _side_label_from_position(position: float) -> str:
@@ -100,10 +94,7 @@ def compute_contract_metrics(
                 "commissions_mad",
                 "pnl_management_mad",
                 "notional_mad",
-                "margin_mad",
                 "peak_abs_position",
-                "capital_engaged_mad",
-                "leverage",
             ]
         )
 
@@ -148,10 +139,7 @@ def compute_contract_metrics(
         pnl_management_mad = pnl_accounting_mad - commissions_mad
         open_contracts = abs_position
         notional_mad = float(entry_wap * tick_value * open_contracts) if open_contracts > 0 else 0.0
-        margin_mad = float(abs_position * contract.effective_initial_margin_per_lot)
         peak_abs_position = _peak_abs_position_from_trades(contract_trades)
-        capital_engaged_mad = float(peak_abs_position * contract.effective_initial_margin_per_lot)
-        leverage = float(notional_mad / margin_mad) if margin_mad else 0.0
 
         metrics.append(
             {
@@ -164,7 +152,6 @@ def compute_contract_metrics(
                 "mtm_price": contract.mtm_price,
                 "mtm_source": contract.mtm_source,
                 "effective_tick_value": tick_value,
-                "effective_initial_margin_per_lot": float(contract.effective_initial_margin_per_lot),
                 "effective_position_limit_per_contract": float(contract.effective_position_limit_per_contract)
                 if pd.notna(contract.effective_position_limit_per_contract)
                 else np.nan,
@@ -188,10 +175,7 @@ def compute_contract_metrics(
                 "commissions_mad": commissions_mad,
                 "pnl_management_mad": pnl_management_mad,
                 "notional_mad": notional_mad,
-                "margin_mad": margin_mad,
                 "peak_abs_position": peak_abs_position,
-                "capital_engaged_mad": capital_engaged_mad,
-                "leverage": leverage,
                 "position_limit_breach": bool(
                     pd.notna(contract.effective_position_limit_per_contract)
                     and abs_position > float(contract.effective_position_limit_per_contract)
@@ -213,22 +197,7 @@ def compute_global_metrics(contract_metrics_df: pd.DataFrame) -> dict:
         "total_commissions": float(contract_metrics_df.get("commissions_mad", pd.Series(dtype=float)).sum()),
         "total_management_pnl": float(contract_metrics_df.get("pnl_management_mad", pd.Series(dtype=float)).sum()),
         "total_notional": float(contract_metrics_df.get("notional_mad", pd.Series(dtype=float)).sum()),
-        "total_margin": float(contract_metrics_df.get("margin_mad", pd.Series(dtype=float)).sum()),
     }
-    total_margin = totals["total_margin"]
-    capital_total_engaged = float(
-        contract_metrics_df.get("capital_engaged_mad", pd.Series(dtype=float)).sum()
-    )
-    if not capital_total_engaged:
-        capital_total_engaged = total_margin
-    totals.update(
-        {
-            "global_leverage": float(totals["total_notional"] / total_margin) if total_margin else 0.0,
-            "roi_on_margin": _safe_ratio(totals["total_management_pnl"], total_margin),
-            "capital_total_engaged": capital_total_engaged,
-            "roi_on_capital_engaged": _safe_ratio(totals["total_management_pnl"], capital_total_engaged),
-        }
-    )
     totals.update(_open_notional_totals_by_future_side(contract_metrics_df))
     totals["global_exposure"] = (
         totals["open_notional_futures_long"] + totals["open_notional_futures_short"]
@@ -246,21 +215,28 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
         "mtm_price",
         "mtm_source",
         "effective_tick_value",
-        "effective_initial_margin_per_lot",
         "effective_position_limit_per_contract",
         "cmp_final_position",
         "cmp_final_cost",
         "cmp_realized_total",
         "cmp_unrealized",
         "cmp_total",
-        "difference_vs_wap",
-        "within_tolerance",
+        "total_buys_lots",
+        "total_sells_lots",
+        "official_net_position",
+        "net_position",
         "side_label",
         "replication_side_label",
+        "direction",
         "abs_position",
+        "entry_wap",
+        "delta_points",
+        "pnl_unrealized_mad",
+        "pnl_realized_mad",
+        "pnl_accounting_mad",
+        "commissions_mad",
+        "pnl_management_mad",
         "notional_mad",
-        "margin_mad",
-        "leverage",
         "position_limit_breach",
     ]
     if contract_metrics_df.empty:
@@ -276,8 +252,10 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
             "mtm_price",
             "mtm_source",
             "effective_tick_value",
-            "effective_initial_margin_per_lot",
             "effective_position_limit_per_contract",
+            "total_buys_lots",
+            "total_sells_lots",
+            "commissions_mad",
         ]
     ].copy()
 
@@ -290,8 +268,6 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
                 "cmp_realized_total",
                 "cmp_unrealized",
                 "cmp_total",
-                "difference_vs_wap",
-                "within_tolerance",
             ]
         ].copy()
         if not cmp_summary_df.empty
@@ -303,8 +279,6 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
                 "cmp_realized_total",
                 "cmp_unrealized",
                 "cmp_total",
-                "difference_vs_wap",
-                "within_tolerance",
             ]
         )
     )
@@ -316,55 +290,34 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
         "cmp_realized_total",
         "cmp_unrealized",
         "cmp_total",
-        "difference_vs_wap",
     ]
     for column in numeric_fill_columns:
         portfolio[column] = pd.to_numeric(portfolio[column], errors="coerce").fillna(0.0)
-    portfolio["within_tolerance"] = (
-        portfolio["within_tolerance"]
-        .astype("boolean")
-        .fillna(True)
-        .astype(bool)
-    )
 
     portfolio["abs_position"] = portfolio["cmp_final_position"].abs()
     portfolio["side_label"] = portfolio["cmp_final_position"].map(_side_label_from_position)
     portfolio["replication_side_label"] = portfolio["cmp_final_position"].map(_replication_side_label_from_position)
-    portfolio["notional_mad"] = portfolio["abs_position"] * portfolio["cmp_final_cost"] * portfolio["effective_tick_value"]
-    portfolio["margin_mad"] = portfolio["abs_position"] * portfolio["effective_initial_margin_per_lot"]
-    portfolio["leverage"] = np.where(
-        portfolio["margin_mad"].ne(0),
-        portfolio["notional_mad"] / portfolio["margin_mad"],
+    portfolio["official_net_position"] = portfolio["cmp_final_position"]
+    portfolio["net_position"] = portfolio["cmp_final_position"]
+    portfolio["direction"] = np.where(portfolio["cmp_final_position"].ge(0), 1.0, -1.0)
+    portfolio["entry_wap"] = portfolio["cmp_final_cost"]
+    portfolio["delta_points"] = np.where(
+        portfolio["mtm_price"].notna(),
+        portfolio["mtm_price"] - portfolio["cmp_final_cost"],
         0.0,
     )
+    portfolio["pnl_unrealized_mad"] = portfolio["cmp_unrealized"]
+    portfolio["pnl_realized_mad"] = portfolio["cmp_realized_total"]
+    portfolio["pnl_accounting_mad"] = portfolio["cmp_total"]
+    portfolio["commissions_mad"] = pd.to_numeric(portfolio["commissions_mad"], errors="coerce").fillna(0.0)
+    portfolio["pnl_management_mad"] = portfolio["pnl_accounting_mad"] - portfolio["commissions_mad"]
+    portfolio["notional_mad"] = portfolio["abs_position"] * portfolio["cmp_final_cost"] * portfolio["effective_tick_value"]
     portfolio["position_limit_breach"] = (
         portfolio["effective_position_limit_per_contract"].notna()
         & portfolio["abs_position"].gt(portfolio["effective_position_limit_per_contract"])
     )
 
     return portfolio[output_columns].sort_values("contract_code").reset_index(drop=True)
-
-
-def compute_cmp_global_metrics(cmp_portfolio_df: pd.DataFrame) -> dict:
-    totals = {
-        "total_cmp_unrealized": float(cmp_portfolio_df.get("cmp_unrealized", pd.Series(dtype=float)).sum()),
-        "total_cmp_realized": float(cmp_portfolio_df.get("cmp_realized_total", pd.Series(dtype=float)).sum()),
-        "total_cmp_pnl": float(cmp_portfolio_df.get("cmp_total", pd.Series(dtype=float)).sum()),
-        "total_notional": float(cmp_portfolio_df.get("notional_mad", pd.Series(dtype=float)).sum()),
-        "total_margin": float(cmp_portfolio_df.get("margin_mad", pd.Series(dtype=float)).sum()),
-    }
-    total_margin = totals["total_margin"]
-    totals.update(
-        {
-            "global_leverage": float(totals["total_notional"] / total_margin) if total_margin else 0.0,
-            "roi_on_margin": _safe_ratio(totals["total_cmp_pnl"], total_margin),
-        }
-    )
-    totals.update(_open_notional_totals_by_future_side(cmp_portfolio_df))
-    totals["global_exposure"] = (
-        totals["open_notional_futures_long"] + totals["open_notional_futures_short"]
-    )
-    return totals
 
 
 def build_dashboard_alerts(
@@ -519,7 +472,7 @@ def compute_cmp_sequential(transactions_df: pd.DataFrame, contract_metrics_df: p
     ]
     summary_cols = [
         "contract_code", "cmp_final_position", "cmp_final_cost", "cmp_realized_total", "cmp_unrealized",
-        "cmp_total", "wap_accounting_total", "difference_vs_wap", "within_tolerance"
+        "cmp_total"
     ]
 
     if transactions_df.empty or contract_metrics_df.empty:
@@ -527,18 +480,15 @@ def compute_cmp_sequential(transactions_df: pd.DataFrame, contract_metrics_df: p
 
     valid_tx = transactions_df.loc[transactions_df["is_official_for_calc"].fillna(False)].copy()
     if valid_tx.empty:
-        summary_empty = contract_metrics_df[["contract_code", "pnl_accounting_mad"]].copy()
-        summary_empty.rename(columns={"pnl_accounting_mad": "wap_accounting_total"}, inplace=True)
-        for col in ["cmp_final_position", "cmp_final_cost", "cmp_realized_total", "cmp_unrealized", "cmp_total", "difference_vs_wap"]:
+        summary_empty = contract_metrics_df[["contract_code"]].copy()
+        for col in ["cmp_final_position", "cmp_final_cost", "cmp_realized_total", "cmp_unrealized", "cmp_total"]:
             summary_empty[col] = 0.0
-        summary_empty["within_tolerance"] = True
         return pd.DataFrame(columns=detail_cols), summary_empty[summary_cols]
 
     valid_tx = valid_tx.sort_values(["chrono_key"]).reset_index(drop=True)
 
     tick_values = dict(zip(contract_metrics_df["contract_code"], contract_metrics_df["effective_tick_value"]))
     mtm_prices = dict(zip(contract_metrics_df["contract_code"], contract_metrics_df["mtm_price"]))
-    wap_accounting = dict(zip(contract_metrics_df["contract_code"], contract_metrics_df["pnl_accounting_mad"]))
 
     detail_records = []
     summary_records = []
@@ -613,9 +563,6 @@ def compute_cmp_sequential(transactions_df: pd.DataFrame, contract_metrics_df: p
             cmp_unrealized = float((mtm_price - cmp_val) * direction * abs(pos) * tick_value)
 
         cmp_total = realized_pnl_total + cmp_unrealized
-        wap_acc = wap_accounting.get(contract, 0.0)
-        diff = cmp_total - wap_acc
-        within_tol = abs(diff) <= CMP_TOLERANCE
 
         summary_records.append({
             "contract_code": contract,
@@ -624,9 +571,6 @@ def compute_cmp_sequential(transactions_df: pd.DataFrame, contract_metrics_df: p
             "cmp_realized_total": realized_pnl_total,
             "cmp_unrealized": cmp_unrealized,
             "cmp_total": cmp_total,
-            "wap_accounting_total": wap_acc,
-            "difference_vs_wap": diff,
-            "within_tolerance": within_tol
         })
 
     detail_df = pd.DataFrame(detail_records) if detail_records else pd.DataFrame(columns=detail_cols)
@@ -636,20 +580,13 @@ def compute_cmp_sequential(transactions_df: pd.DataFrame, contract_metrics_df: p
         all_contracts = contract_metrics_df[["contract_code"]].copy()
         if not summary_df.empty:
             summary_df = pd.merge(all_contracts, summary_df, on="contract_code", how="left")
-            summary_df["wap_accounting_total"] = summary_df["contract_code"].map(wap_accounting).fillna(0.0)
-            
+
             for col in ["cmp_final_position", "cmp_final_cost", "cmp_realized_total", "cmp_unrealized", "cmp_total"]:
                 summary_df[col] = summary_df[col].fillna(0.0)
-            
-            summary_df["difference_vs_wap"] = summary_df["cmp_total"] - summary_df["wap_accounting_total"]
-            summary_df["within_tolerance"] = summary_df["difference_vs_wap"].abs() <= CMP_TOLERANCE
         else:
             summary_df = all_contracts
-            summary_df["wap_accounting_total"] = summary_df["contract_code"].map(wap_accounting).fillna(0.0)
             for col in ["cmp_final_position", "cmp_final_cost", "cmp_realized_total", "cmp_unrealized", "cmp_total"]:
                 summary_df[col] = 0.0
-            summary_df["difference_vs_wap"] = summary_df["cmp_total"] - summary_df["wap_accounting_total"]
-            summary_df["within_tolerance"] = summary_df["difference_vs_wap"].abs() <= CMP_TOLERANCE
             
         summary_df = summary_df[summary_cols]
 
