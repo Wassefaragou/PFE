@@ -152,25 +152,46 @@ def build_dashboard_snapshot(app_state: dict, snapshot_date: str | None = None) 
     return snapshot
 
 
-def upsert_today_dashboard_snapshot(app_state: dict) -> pd.DataFrame:
-    snapshot = build_dashboard_snapshot(app_state)
-    history = load_dashboard_history()
-    snapshot_date = str(snapshot["date"])
+def _normalize_dashboard_date(value: object) -> str:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.notna(parsed):
+        return pd.Timestamp(parsed).strftime("%Y-%m-%d")
+    return str(value).strip()
+
+
+def merge_dashboard_snapshot(history: pd.DataFrame, snapshot: dict) -> tuple[pd.DataFrame, bool]:
+    snapshot = dict(snapshot)
+    snapshot["date"] = _normalize_dashboard_date(snapshot.get("date"))
+    snapshot_date = snapshot["date"]
 
     if history.empty:
         updated = pd.DataFrame([snapshot], columns=DASHBOARD_HISTORY_COLUMNS)
-    else:
-        history = history.copy()
-        history["date"] = history["date"].astype(str)
-        history = history.loc[history["date"] != snapshot_date]
-        updated = pd.concat(
-            [history, pd.DataFrame([snapshot], columns=DASHBOARD_HISTORY_COLUMNS)],
-            ignore_index=True,
-        )
+        return updated, False
 
+    normalized_history = history.copy()
+    normalized_history["date"] = normalized_history["date"].map(_normalize_dashboard_date)
+
+    known_dates = set(normalized_history["date"].dropna().astype(str))
+    is_new_day = snapshot_date not in known_dates
+
+    previous_days = normalized_history.loc[normalized_history["date"] != snapshot_date].copy()
+    updated = pd.concat(
+        [previous_days, pd.DataFrame([snapshot], columns=DASHBOARD_HISTORY_COLUMNS)],
+        ignore_index=True,
+    )
     updated = updated.sort_values("date").reset_index(drop=True)
+    return updated, is_new_day
+
+
+def upsert_today_dashboard_snapshot(app_state: dict) -> pd.DataFrame:
+    snapshot = build_dashboard_snapshot(app_state)
+    history = load_dashboard_history()
+    updated, is_new_day = merge_dashboard_snapshot(history, snapshot)
     save_dashboard_history(updated)
-    return load_dashboard_history()
+    saved_history = load_dashboard_history()
+    saved_history.attrs["snapshot_date"] = str(snapshot["date"])
+    saved_history.attrs["is_new_dashboard_day"] = bool(is_new_day)
+    return saved_history
 
 
 def dashboard_history_dates(history_df: pd.DataFrame) -> list[str]:

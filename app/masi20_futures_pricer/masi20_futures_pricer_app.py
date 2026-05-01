@@ -1552,7 +1552,6 @@ def run():
         st.info("Le taux de dividende auto sera calcule une fois les titres renseignes.")
 
     spot_ready = pd.notna(spot_price)
-    r_used = r_final
     multi_records: list[dict] = []
 
     st.markdown("##### Parametres")

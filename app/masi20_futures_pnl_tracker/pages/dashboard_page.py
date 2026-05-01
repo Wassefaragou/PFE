@@ -21,6 +21,8 @@ from futures_pnl.ui import (
 init_page("Dashboard")
 live_state = load_app_state()
 dashboard_history = upsert_today_dashboard_snapshot(live_state)
+if dashboard_history.attrs.get("is_new_dashboard_day"):
+    st.session_state[DASHBOARD_HISTORY_FILTER_KEY] = dashboard_history.attrs.get("snapshot_date")
 preselected_history_date = st.session_state.get(DASHBOARD_HISTORY_FILTER_KEY)
 sidebar_snapshot = get_dashboard_snapshot(dashboard_history, preselected_history_date)
 sidebar_state = dashboard_state_from_snapshot(sidebar_snapshot, live_state)

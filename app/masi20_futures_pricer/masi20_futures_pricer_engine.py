@@ -634,7 +634,7 @@ def compute_dividend_yield(
 ) -> tuple[float, pd.DataFrame]:
     """
     Calcule le taux de dividende pondere de l'indice MASI 20.
-    Div Yield = Somme((Di / Ci) x pi)
+    Div Yield = Somme((Di / Ci) x pi), avec pi deja fourni dans weights.
     """
     if weights is None:
         tickers = sorted(set(stock_prices.keys()) | set(dividends.keys()))
@@ -647,20 +647,17 @@ def compute_dividend_yield(
     if weights is None:
         weights = {ticker: 1.0 / len(tickers) for ticker in tickers}
 
-    total_weight = sum(weights.get(ticker, 0) for ticker in tickers)
-    if total_weight == 0:
-        return 0.0, pd.DataFrame()
-
     records = [] if include_details else None
     div_yield_total = 0.0
 
     for ticker in tickers:
         current_price = stock_prices.get(ticker, None)
         dividend = dividends.get(ticker, None)
-        normalized_weight = weights.get(ticker, 0) / total_weight
+        weight_pi = weights.get(ticker, 0)
+        has_complete_data = current_price is not None and current_price > 0 and dividend is not None
 
-        if current_price is not None and current_price > 0 and dividend is not None:
-            div_yield_i = (dividend / current_price) * normalized_weight
+        if has_complete_data:
+            div_yield_i = (dividend / current_price) * weight_pi
         else:
             div_yield_i = 0.0
 
@@ -672,11 +669,11 @@ def compute_dividend_yield(
                     "Cours (Ci)": current_price,
                     "Dividende (Di)": dividend,
                     "Di/Ci (%)": (dividend / current_price * 100.0)
-                    if current_price is not None and current_price > 0 and dividend is not None
+                    if has_complete_data
                     else 0.0,
-                    "Poids (pi)": normalized_weight,
+                    "Poids (pi)": weight_pi,
                     "Contribution (%)": div_yield_i * 100.0,
-                    "Donnees completes": current_price is not None and current_price > 0 and dividend is not None,
+                    "Donnees completes": has_complete_data,
                 }
             )
 
