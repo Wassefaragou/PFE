@@ -1,5 +1,1 @@
 contract_code,underlying_name,expiry_date,tick_value,settlement_price_points,position_limit_per_contract,comments
-FMASI20JUI26,MASI20,2026-06-26,,1600.0,,
-FMASI20SEP26,MASI20,2026-09-25,,1430.0,,
-FMASI20DEC26,MASI20,2026-12-25,,1490.0,,
-FMASI20MAR27,MASI20,2027-03-26,,1500.0,,
