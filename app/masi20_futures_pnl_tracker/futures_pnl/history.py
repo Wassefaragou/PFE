@@ -212,6 +212,13 @@ def get_dashboard_snapshot(history_df: pd.DataFrame, selected_date: str | None) 
     return matches.iloc[-1].to_dict()
 
 
+def dashboard_portfolio_for_date(history_df: pd.DataFrame, selected_date: str | None) -> pd.DataFrame:
+    snapshot = get_dashboard_snapshot(history_df, selected_date)
+    if snapshot is None:
+        return pd.DataFrame()
+    return _deserialize_dataframe(snapshot.get("portfolio_json"))
+
+
 def dashboard_state_from_snapshot(snapshot: dict | None, fallback_state: dict) -> dict:
     if snapshot is None:
         return fallback_state

@@ -11,10 +11,22 @@ from .analytics import (
     compute_confirmed_positions,
     compute_contract_metrics,
     compute_global_metrics,
+    enrich_daily_margin_calls,
 )
 from .config import APP_TITLE, CONTRACT_COLUMNS, TRANSACTION_COLUMNS
 from .contracts import prepare_contracts_for_valuation
-from .storage import ensure_storage, load_contracts, load_settings, load_transactions, reset_storage
+from .daily_prices import latest_price_date_before, price_map_for_date, sync_daily_prices
+from .history import dashboard_portfolio_for_date
+from .storage import (
+    ensure_storage,
+    load_contracts,
+    load_daily_prices,
+    load_dashboard_history,
+    load_settings,
+    load_transactions,
+    reset_storage,
+    save_daily_prices,
+)
 from .validators import validate_contracts, validate_transactions
 
 STYLE_PATH = Path(__file__).resolve().parents[1] / "style.css"
@@ -103,6 +115,15 @@ DISPLAY_LABELS = {
     "daily_delta": "Delta jour",
     "daily_variation_mad": "Var. jour MAD",
     "total_daily_variation": "Variation totale",
+    "previous_price_date": "Date ref precedente",
+    "previous_mtm_price": "Cours ref precedent",
+    "daily_price_delta_points": "Variation ref",
+    "previous_open_position": "Position veille",
+    "new_position_today": "Position nouvelle",
+    "new_position_cmp": "CMP position nouvelle",
+    "daily_mtm_mad": "MtM jour",
+    "daily_latent_mad": "Latent jour",
+    "margin_call_mad": "Margin call jour",
     "round_trip_fee_per_lot": "Frais AR / lot",
     "is_valid": "Ligne valide",
     "chrono_key": "Cle chrono",
@@ -174,12 +195,17 @@ MONEY_COLUMNS = {
     "trade_realized_pnl",
     "daily_variation_mad",
     "total_daily_variation",
+    "daily_mtm_mad",
+    "daily_latent_mad",
+    "margin_call_mad",
     "round_trip_fee_per_lot",
 }
 POINT_COLUMNS = {
     "settlement_price_points",
     "price_points",
     "mtm_price",
+    "previous_mtm_price",
+    "daily_price_delta_points",
     "wap_buys",
     "wap_sells",
     "entry_wap",
@@ -187,6 +213,7 @@ POINT_COLUMNS = {
     "cmp_before",
     "cmp_after",
     "cmp_final_cost",
+    "new_position_cmp",
 }
 QUANTITY_COLUMNS = {
     "tick_value",
@@ -204,6 +231,8 @@ QUANTITY_COLUMNS = {
     "confirmed_net_position",
     "delta_vs_all",
     "abs_position",
+    "previous_open_position",
+    "new_position_today",
     "matched_qty",
     "signed_qty",
     "pos_before",
@@ -671,14 +700,25 @@ def load_app_state() -> dict:
     settings = load_settings()
     contracts_raw = load_contracts()
     transactions_raw = load_transactions()
+    dashboard_history = load_dashboard_history()
 
     contracts_validated, contract_issues = validate_contracts(contracts_raw, settings)
     contracts_ready = prepare_contracts_for_valuation(contracts_validated)
+    daily_prices = sync_daily_prices(load_daily_prices(), contracts_ready, dashboard_history)
+    save_daily_prices(daily_prices)
+    previous_price_date = latest_price_date_before(daily_prices)
+    previous_price_map = price_map_for_date(daily_prices, previous_price_date)
+    previous_portfolio = dashboard_portfolio_for_date(dashboard_history, previous_price_date)
     transactions_validated, transaction_issues = validate_transactions(transactions_raw, contracts_ready)
     reference_contract_metrics = compute_contract_metrics(contracts_ready, transactions_validated, settings)
     cmp_detail, cmp_summary = compute_cmp_sequential(transactions_validated, reference_contract_metrics)
     cmp_portfolio = build_cmp_portfolio_view(reference_contract_metrics, cmp_summary)
-    contract_metrics = cmp_portfolio
+    contract_metrics = enrich_daily_margin_calls(
+        cmp_portfolio,
+        previous_portfolio,
+        previous_price_map,
+        previous_price_date,
+    )
     confirmed_positions = compute_confirmed_positions(transactions_validated, contract_metrics)
     global_metrics = compute_global_metrics(contract_metrics)
     alerts = build_dashboard_alerts(
@@ -695,6 +735,8 @@ def load_app_state() -> dict:
         "transactions_raw": transactions_raw,
         "contracts_validated": contracts_validated,
         "contracts_ready": contracts_ready,
+        "daily_prices": daily_prices,
+        "previous_price_date": previous_price_date,
         "contract_issues": contract_issues,
         "transactions_validated": transactions_validated,
         "transaction_issues": transaction_issues,

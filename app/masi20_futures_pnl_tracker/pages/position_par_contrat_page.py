@@ -18,6 +18,13 @@ render_sidebar_tools(state)
 contract_metrics = state["contract_metrics"]
 confirmed_positions = state["confirmed_positions"]
 
+
+def _numeric_sum(dataframe, column: str) -> float:
+    if dataframe.empty or column not in dataframe.columns:
+        return 0.0
+    return float(dataframe[column].sum())
+
+
 render_hero(
     "Position par contrat",
     "Vue officielle du portefeuille par contrat en CMP sequentiel, avec une lecture informative des seuls trades confirmes.",
@@ -26,17 +33,24 @@ render_hero(
 long_count = int((contract_metrics["net_position"] > 0).sum()) if not contract_metrics.empty else 0
 short_count = int((contract_metrics["net_position"] < 0).sum()) if not contract_metrics.empty else 0
 breach_count = int(contract_metrics["position_limit_breach"].fillna(False).sum()) if not contract_metrics.empty else 0
-mgmt_pnl = float(contract_metrics["pnl_management_mad"].sum()) if not contract_metrics.empty else 0.0
+open_contract_count = int((contract_metrics["abs_position"] > 0).sum()) if not contract_metrics.empty else 0
+mgmt_pnl = _numeric_sum(contract_metrics, "pnl_management_mad")
+margin_call_total = _numeric_sum(contract_metrics, "margin_call_mad")
 
 render_metric_cards(
     [
-        {"label": "Contrats ouverts", "value": str(int((contract_metrics['abs_position'] > 0).sum())) if not contract_metrics.empty else "0", "glow": "gold"},
+        {
+            "label": "Contrats ouverts",
+            "value": str(open_contract_count),
+            "glow": "gold",
+        },
         {"label": "Contrats longs", "value": str(long_count), "glow": "green"},
         {"label": "Contrats shorts", "value": str(short_count), "glow": "purple"},
         {"label": "P&L economique", "value": format_currency(mgmt_pnl), "glow": "blue"},
+        {"label": "Margin call jour", "value": format_currency(margin_call_total), "glow": "gold"},
         {"label": "Limites depassees", "value": str(breach_count), "glow": "red"},
     ],
-    columns=5,
+    columns=6,
 )
 
 render_section_header(
@@ -61,8 +75,17 @@ else:
             "replication_side_label",
             "cmp_final_cost",
             "mtm_price",
+            "previous_price_date",
+            "previous_mtm_price",
+            "daily_price_delta_points",
+            "previous_open_position",
+            "new_position_today",
+            "new_position_cmp",
             "delta_points",
             "cmp_unrealized",
+            "daily_mtm_mad",
+            "daily_latent_mad",
+            "margin_call_mad",
             "cmp_realized_total",
             "cmp_total",
             "commissions_mad",
@@ -74,6 +97,8 @@ else:
         label_overrides={
             "cmp_final_cost": "CMP sequentiel",
             "cmp_unrealized": "P&L latent sequentiel",
+            "daily_mtm_mad": "MtM jour",
+            "daily_latent_mad": "Latent jour",
             "cmp_realized_total": "P&L realise sequentiel",
             "cmp_total": "P&L total sequentiel",
             "notional_mad": "Notionnel abs.",

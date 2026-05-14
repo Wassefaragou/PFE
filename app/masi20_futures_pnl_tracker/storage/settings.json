@@ -1,5 +1,5 @@
 {
-  "default_tick_value": null,
+  "default_tick_value": 10.0,
   "commission_bvc_rt": null,
   "commission_broker_rt": null,
   "commission_sgmat_rt": null,

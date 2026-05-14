@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import hashlib
+import html
 import io
 import json
 import math
@@ -35,6 +36,11 @@ MASI20_INDEX_CODE = "MSI20"
 MASI20_INDEX_PAGE_URL = f"https://www.casablanca-bourse.com/fr/live-market/indices/{MASI20_INDEX_CODE}"
 BVC_PROXY_BASE_URL = "https://www.casablanca-bourse.com/api/proxy"
 EXPECTED_MASI20_TITLES = 20
+UPLOAD_SIGNATURE_STATE_KEY = "uploaded_signature"
+EXCLUDED_TITLES_STATE_KEY = "replication_excluded_tickers"
+USER_K_INPUT_STATE_KEY = "user_k_input"
+RESULT_STATE_KEYS = ("result", "data", "mode", "elapsed")
+WINDOW_INPUT_STATE_KEYS = ("window_max_days", "train_days_input", "test_days_input", "rebal_days_input")
 BVC_MARKET_ROWS_STATE_KEY = "replication_bvc_market_rows"
 BVC_MARKET_FETCHED_AT_STATE_KEY = "replication_bvc_market_fetched_at"
 MASI20_TICKER_ALIASES = {
@@ -415,22 +421,42 @@ def run():
 
 
     def sync_uploaded_file_state(uploaded):
-        prev_signature = st.session_state.get('uploaded_signature')
+        prev_signature = st.session_state.get(UPLOAD_SIGNATURE_STATE_KEY)
 
         if uploaded is None:
             if prev_signature is not None:
                 clear_results()
                 reset_window_inputs()
-                del st.session_state['uploaded_signature']
+                st.session_state.pop(UPLOAD_SIGNATURE_STATE_KEY, None)
+                st.session_state.pop(EXCLUDED_TITLES_STATE_KEY, None)
             return
 
         curr_signature = get_uploaded_file_signature(uploaded)
         if prev_signature != curr_signature:
             clear_results()
             reset_window_inputs()
-            st.session_state['uploaded_signature'] = curr_signature
+            st.session_state[UPLOAD_SIGNATURE_STATE_KEY] = curr_signature
+            st.session_state.pop(EXCLUDED_TITLES_STATE_KEY, None)
 
         uploaded.seek(0)
+
+
+    def prune_excluded_titles_to_universe(data):
+        if EXCLUDED_TITLES_STATE_KEY not in st.session_state:
+            return
+
+        selected_norms = {
+            normalize_ticker(ticker)
+            for ticker in st.session_state.get(EXCLUDED_TITLES_STATE_KEY, [])
+            if normalize_ticker(ticker)
+        }
+        valid_titles = [
+            title
+            for title in data['companies']
+            if normalize_ticker(title) in selected_norms
+        ]
+        if valid_titles != st.session_state.get(EXCLUDED_TITLES_STATE_KEY):
+            st.session_state[EXCLUDED_TITLES_STATE_KEY] = valid_titles
 
 
     @st.cache_data(show_spinner=False)
@@ -852,7 +878,7 @@ def run():
     # SIDEBAR
     # ══════════════════════════════════════════════════════════════
     def clear_results():
-        for key in ['result', 'data', 'mode', 'elapsed']:
+        for key in RESULT_STATE_KEYS:
             if key in st.session_state:
                 del st.session_state[key]
 
@@ -866,7 +892,7 @@ def run():
         return clamp_int(value, min_value, max_value)
 
     def reset_window_inputs():
-        for key in ['window_max_days', 'train_days_input', 'test_days_input', 'rebal_days_input']:
+        for key in WINDOW_INPUT_STATE_KEYS:
             if key in st.session_state:
                 del st.session_state[key]
 
@@ -1006,24 +1032,33 @@ def run():
                 st.markdown(f'<div class="alert-error">❌ Le fichier doit avoir <strong>au moins 3 colonnes</strong> : Date, Indice et 1 titre. Actuel : <strong>{raw_df.shape[1]}</strong>.</div>', unsafe_allow_html=True)
                 st.stop()
 
-            atw_available = 'ATW' in data['companies']
-            include_atw = st.checkbox(
-                "Inclure Attijari (ATW) dans le portefeuille de replication",
-                value=atw_available,
-                disabled=not atw_available,
-                help="Decochez pour exclure ATW de la selection automatique et manuelle.",
-                on_change=clear_results
-            )
-            if not atw_available:
-                st.markdown('<div class="alert-info">ATW est absente du fichier importe.</div>', unsafe_allow_html=True)
-
-            data = filter_replication_universe(
-                data,
-                excluded_tickers=[] if include_atw else ['ATW']
+            prune_excluded_titles_to_universe(data)
+            excluded_titles = st.multiselect(
+                "Titres a enlever de la replication",
+                options=data['companies'],
+                key=EXCLUDED_TITLES_STATE_KEY,
+                help=(
+                    "Les titres choisis sont retires de l'univers avant les selections "
+                    "automatiques, la selection manuelle et le calcul des poids."
+                ),
+                on_change=clear_results,
             )
 
-            if atw_available and not include_atw:
-                st.markdown('<div class="alert-info">ATW est exclue de l\'univers de replication pour cette execution.</div>', unsafe_allow_html=True)
+            if len(excluded_titles) >= len(data['companies']):
+                st.markdown(
+                    '<div class="alert-error">Gardez au moins un titre dans l\'univers de replication.</div>',
+                    unsafe_allow_html=True,
+                )
+                st.stop()
+
+            data = filter_replication_universe(data, excluded_tickers=excluded_titles)
+
+            if excluded_titles:
+                excluded_label = ", ".join(html.escape(title) for title in excluded_titles)
+                st.markdown(
+                    f'<div class="alert-info">{len(excluded_titles)} titre(s) exclu(s) de la replication et des methodes de selection : {excluded_label}.</div>',
+                    unsafe_allow_html=True,
+                )
 
             n_days = len(data['dates'])
             n_actions = len(data['companies'])
@@ -1076,12 +1111,23 @@ def run():
 
             col_k, col_sel = st.columns(2)
             with col_k:
+                if USER_K_INPUT_STATE_KEY in st.session_state:
+                    st.session_state[USER_K_INPUT_STATE_KEY] = clamp_int(
+                        st.session_state[USER_K_INPUT_STATE_KEY],
+                        1,
+                        n_actions,
+                    )
+                else:
+                    st.session_state[USER_K_INPUT_STATE_KEY] = min(7, n_actions)
+
                 user_k = st.number_input(
-                    "Nb titres (K)", 
-                    min_value=1, max_value=n_actions, value=min(7, n_actions), step=1,
+                    "Nb titres (K)",
+                    min_value=1, max_value=n_actions, step=1,
+                    key=USER_K_INPUT_STATE_KEY,
                     help="Nombre de titres à retenir.",
                     on_change=clear_results
                 )
+                user_k = int(user_k)
                 st.session_state['user_k'] = user_k
                 
             with col_sel:

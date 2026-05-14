@@ -2,6 +2,19 @@ import numpy as np
 import pandas as pd
 
 
+MARGIN_CALL_COLUMNS = [
+    "previous_price_date",
+    "previous_mtm_price",
+    "daily_price_delta_points",
+    "previous_open_position",
+    "new_position_today",
+    "new_position_cmp",
+    "daily_mtm_mad",
+    "daily_latent_mad",
+    "margin_call_mad",
+]
+
+
 def _safe_weighted_average(dataframe: pd.DataFrame) -> float:
     if dataframe.empty:
         return 0.0
@@ -40,6 +53,29 @@ def _replication_side_label_from_position(position: float) -> str:
     if position < 0:
         return "LONG"
     return "FLAT"
+
+
+def _position_sign(position: float) -> int:
+    if position > 0:
+        return 1
+    if position < 0:
+        return -1
+    return 0
+
+
+def _coerce_float(value: object, fallback: float = np.nan) -> float:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric):
+        return fallback
+    return float(numeric)
+
+
+def _with_empty_margin_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
+    output = dataframe.copy()
+    for column in MARGIN_CALL_COLUMNS:
+        dtype = "object" if column == "previous_price_date" else "float64"
+        output[column] = pd.Series(dtype=dtype)
+    return output
 
 
 def _open_notional_totals_by_future_side(dataframe: pd.DataFrame) -> dict:
@@ -318,6 +354,146 @@ def build_cmp_portfolio_view(contract_metrics_df: pd.DataFrame, cmp_summary_df: 
     )
 
     return portfolio[output_columns].sort_values("contract_code").reset_index(drop=True)
+
+
+def _portfolio_numeric_map(
+    portfolio_df: pd.DataFrame | None,
+    value_column: str,
+    fallback_column: str | None = None,
+) -> dict[str, float]:
+    if portfolio_df is None or portfolio_df.empty or "contract_code" not in portfolio_df.columns:
+        return {}
+
+    portfolio = portfolio_df.copy()
+    if value_column not in portfolio.columns:
+        if fallback_column is None or fallback_column not in portfolio.columns:
+            return {}
+        value_column = fallback_column
+
+    portfolio = portfolio.dropna(subset=["contract_code"]).drop_duplicates("contract_code", keep="last")
+    return dict(
+        zip(
+            portfolio["contract_code"],
+            pd.to_numeric(portfolio[value_column], errors="coerce").fillna(0.0),
+        )
+    )
+
+
+def _incremental_position_and_cmp(
+    current_position: float,
+    current_cmp: float,
+    previous_position: float,
+    previous_cmp: float,
+) -> tuple[float, float]:
+    if current_position == 0:
+        return 0.0, np.nan
+
+    current_sign = _position_sign(current_position)
+    previous_sign = _position_sign(previous_position)
+    if previous_sign == 0 or previous_sign != current_sign:
+        return current_position, current_cmp
+
+    if abs(current_position) <= abs(previous_position):
+        return 0.0, np.nan
+
+    new_position = current_position - previous_position
+    if pd.isna(current_cmp):
+        return new_position, np.nan
+    if pd.isna(previous_cmp) or previous_cmp == 0:
+        return new_position, current_cmp
+
+    new_abs_position = abs(new_position)
+    if new_abs_position == 0:
+        return 0.0, np.nan
+
+    derived_cmp = (
+        abs(current_position) * float(current_cmp)
+        - abs(previous_position) * float(previous_cmp)
+    ) / new_abs_position
+    if not np.isfinite(derived_cmp) or derived_cmp <= 0:
+        derived_cmp = current_cmp
+    return new_position, float(derived_cmp)
+
+
+def enrich_daily_margin_calls(
+    contract_metrics_df: pd.DataFrame,
+    previous_portfolio_df: pd.DataFrame | None,
+    previous_price_map: dict[str, float],
+    previous_price_date: str | None,
+) -> pd.DataFrame:
+    if contract_metrics_df.empty:
+        return _with_empty_margin_columns(contract_metrics_df)
+
+    metrics = contract_metrics_df.copy()
+    previous_positions = _portfolio_numeric_map(
+        previous_portfolio_df,
+        "cmp_final_position",
+        fallback_column="net_position",
+    )
+    previous_cmps = _portfolio_numeric_map(
+        previous_portfolio_df,
+        "cmp_final_cost",
+        fallback_column="entry_wap",
+    )
+
+    records: list[dict] = []
+    for row in metrics.itertuples():
+        contract_code = row.contract_code
+        current_price = _coerce_float(getattr(row, "mtm_price", np.nan))
+        current_position = _coerce_float(getattr(row, "cmp_final_position", 0.0), fallback=0.0)
+        current_cmp = _coerce_float(getattr(row, "cmp_final_cost", np.nan))
+        tick_value = _coerce_float(getattr(row, "effective_tick_value", 0.0), fallback=0.0)
+
+        previous_price = previous_price_map.get(contract_code, np.nan)
+        raw_previous_position = float(previous_positions.get(contract_code, 0.0))
+        previous_cmp = float(previous_cmps.get(contract_code, np.nan))
+
+        has_current_price = pd.notna(current_price)
+        has_previous_reference = pd.notna(previous_price) and raw_previous_position != 0
+        previous_position_for_margin = raw_previous_position if has_previous_reference else 0.0
+        previous_cmp_for_margin = previous_cmp if has_previous_reference else np.nan
+
+        price_delta = (
+            float(current_price) - float(previous_price)
+            if has_current_price and pd.notna(previous_price)
+            else np.nan
+        )
+        daily_mtm = (
+            float(price_delta * previous_position_for_margin * tick_value)
+            if has_current_price and pd.notna(price_delta) and previous_position_for_margin != 0
+            else 0.0
+        )
+
+        new_position, new_cmp = _incremental_position_and_cmp(
+            current_position,
+            current_cmp,
+            previous_position_for_margin,
+            previous_cmp_for_margin,
+        )
+        daily_latent = (
+            float((float(current_price) - float(new_cmp)) * new_position * tick_value)
+            if has_current_price and new_position != 0 and pd.notna(new_cmp)
+            else 0.0
+        )
+        margin_call = daily_mtm + daily_latent
+
+        records.append(
+            {
+                "contract_code": contract_code,
+                "previous_price_date": previous_price_date,
+                "previous_mtm_price": previous_price,
+                "daily_price_delta_points": price_delta,
+                "previous_open_position": raw_previous_position,
+                "new_position_today": new_position,
+                "new_position_cmp": new_cmp,
+                "daily_mtm_mad": daily_mtm,
+                "daily_latent_mad": daily_latent,
+                "margin_call_mad": margin_call,
+            }
+        )
+
+    margin_df = pd.DataFrame(records)
+    return pd.merge(metrics, margin_df, on="contract_code", how="left")
 
 
 def build_dashboard_alerts(
